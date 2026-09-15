@@ -14,6 +14,7 @@
 !/icon-192.png
 !/icon-512.png
 !/apple-touch-icon.png
+!/CNAME
 
 # Backend Google Apps Script (nguồn — đẩy lên Apps Script bằng clasp)
 !/app-backend.gs
