@@ -1,0 +1,97 @@
+# 🏴‍☠️ EQ GYM — Hải Trình Cảm Xúc
+
+App học tập 30 ngày luyện EQ theo phong cách hải trình One Piece: chinh phục đảo, tăng tiền truy nã Berry, thăng cấp từ Tân Binh đến Vua Hải Tặc EQ. Có video bài học, thực hành mỗi ngày và AI (Gemini) chấm điểm.
+
+## 🚀 Deploy lên GitHub Pages (5 phút, không cần code)
+
+1. Vào **github.com** → đăng nhập → bấm **New repository**
+   - Repository name: `eq-gym` (tên gì cũng được)
+   - Chọn **Public** → **Create repository**
+2. Trong repo mới, bấm **uploading an existing file** (hoặc **Add file → Upload files**)
+   - Kéo thả file **`index.html`** (và thư mục `videos/` nếu dùng MP4) vào
+   - Bấm **Commit changes**
+3. Vào **Settings → Pages** (menu bên trái)
+   - Source: **Deploy from a branch**
+   - Branch: **main** / thư mục **/ (root)** → **Save**
+4. Đợi ~1 phút → app chạy tại: `https://<tên-github-của-bạn>.github.io/eq-gym/`
+
+Mở link đó trên điện thoại → **Chia sẻ → Thêm vào màn hình chính** là dùng như app thật.
+
+## 🎬 Gắn video cho từng bài
+
+Mở `index.html`, tìm dòng `const VIDEO_MAP` (ngay đầu phần script). Mỗi bài 1 dòng:
+
+```js
+0:{yt:"https://youtu.be/xxxx", mp4:""},   // dán link YouTube
+2:{yt:"", mp4:"videos/bai2.mp4"},          // hoặc file MP4 tự host
+```
+
+- **YouTube**: dán link dạng nào cũng được (youtu.be, watch?v=, shorts...)
+- **MP4**: upload file vào thư mục `videos/` trong repo rồi ghi đường dẫn
+  (lưu ý GitHub giới hạn file 100MB — video dài nên dùng YouTube)
+- Để trống → app hiện placeholder "Video đang cập nhật"
+
+## 🤖 Bật AI chấm điểm (Gemini — miễn phí)
+
+1. Vào **aistudio.google.com/apikey** → **Create API key** (tài khoản Google thường là được)
+2. Trong app, bấm nút **⚙️** → dán key → **Lưu**
+3. Làm bài thực hành → bấm **"⚔️ Nộp bài cho Thuyền Trưởng AI"** → nhận điểm + nhận xét + Berry
+
+Không có key vẫn dùng được — app tự chấm offline (thuật toán độ sâu cảm xúc).
+Key chỉ lưu trong trình duyệt của người học, không gửi đi đâu ngoài Google.
+
+## 💰 Hệ thống game
+
+| Hành động | Thưởng |
+|---|---|
+| Chinh phục 1 đảo (hoàn thành bài) | +10.000.000 Berry |
+| Nộp bài thực hành lần đầu | +5.000.000 Berry |
+| Điểm AI | +100.000 Berry × điểm |
+| Hoàn thành module | Huy hiệu 🧭 ⚔️ 👑 |
+| Đủ 30 đảo | Danh hiệu **Vua Hải Tặc EQ** ☠️ |
+
+Cấp bậc: Tân Binh Boong Tàu → Thuyền Viên → Hoa Tiêu → Thuyền Phó → Thuyền Trưởng → Tứ Hoàng Cảm Xúc → Vua Hải Tặc EQ
+
+## 🔥 Chuỗi ngày luyện tập
+
+Trang chủ hiện **chuỗi ngày liên tục** nổi bật (biểu tượng lửa). Học viên được tặng sẵn **1 Ngày nghỉ phép** 🧊 —
+lỡ nghỉ đúng 1 ngày thì chuỗi tự giữ nguyên (dùng 1 vé, có thông báo); nghỉ liền ≥2 ngày thì chuỗi mới reset,
+nhưng còn **48 giờ để "sửa chuỗi"** bằng EP (giá tăng theo số ngày đã mất, tối đa 40 triệu EP). Mua thêm vé nghỉ
+phép bằng EP, tối đa 2 lần/tuần, giá tăng dần trong tuần rồi reset. Đạt **chuỗi 7 ngày** lần đầu được thưởng
+20 triệu EP + huy hiệu 🏅 "Tuần Đầu Tiên". Chạm vào ô chuỗi trên trang chủ để xem chi tiết / mua vé / sửa chuỗi.
+Cơ chế này dựa trên nghiên cứu gamification cho khoá học online (chuỗi + "phao cứu" giữ học viên qua mốc rụng cao
+nhất — tuần đầu tiên).
+
+Tiến độ + nhật ký lưu tự động trên máy người học (localStorage), không cần server.
+
+## 📘 Workbook trong app
+
+Mỗi bài có bước **📘 Workbook** (sau phần Bài đọc, trước Phòng tập): học viên đọc trực tiếp từng trang trong app
+hoặc bấm **⬇ Tải / In workbook PDF** để in ra viết tay.
+
+- Ảnh trang: `workbook/wN/pNN.jpg` · PDF: `workbook/bai-N.pdf` · số trang khai báo ở `const WORKBOOK` trong `index.html`.
+- Nguồn là 30 file Word trong `EQGYM/word-new/`. Script tạo lại toàn bộ (cần Word + Python `pywin32`, `pymupdf`):
+  `python tools/wb_build.py` (đường dẫn nguồn `SRC` khai báo đầu script) — script tự **lọc ghi chú sản xuất nội bộ**
+  như "(slide chữ)", "(AI chia ảnh...)", "(Lúc tạo video...)", "(chèn/ghép ảnh ... khi edit)" trước khi xuất.
+- Muốn cập nhật 1 bài: sửa file Word → chạy lại script với số bài → cập nhật số trang trong `WORKBOOK` nếu đổi → tăng `WB_VER` trong `index.html` để trình duyệt bỏ cache ảnh cũ.
+- **Xem phóng to**: chạm vào trang → toàn màn hình; trang workbook được render thẳng từ PDF bằng PDF.js (cdnjs) nên chữ nét ở mọi mức zoom; nếu không tải được thư viện (offline/chặn CDN) app tự dùng ảnh JPG.
+
+## 🎓 Giấy chứng nhận hoàn thành
+
+Khi học viên hoàn thành **Bài 29** (đủ 30/30 buổi), app tự tạo **Giấy chứng nhận** dạng ảnh PNG.
+Khung nền dùng **đúng file thiết kế gốc** `assets/cert-frame.svg` (bản Canva của studio — viền hoa văn góc,
+huy chương dải lụa, nhánh nguyệt quế, chữ ký "Hana Đoàn Thị Hải Loan"...); app chỉ vẽ đè lên trên các trường
+**động**: họ tên, 4 số liệu (buổi tập/điểm EP/điểm TB Coach AI/bài thực hành), ngày hoàn thành, và mã chứng
+nhận `EQG-<năm>-<mã>-<hash>` (góc trên phải, phục vụ tra cứu — không có trong bản thiết kế gốc).
+
+- **Đổi thiết kế khung**: sửa/thay `assets/cert-frame.svg` trực tiếp trong Canva rồi export lại đè file cũ —
+  không cần sửa code. Nếu bố cục đổi (dịch chuyển tên/số liệu/ngày), phải đo lại toạ độ thật bằng cách nạp SVG
+  vào DOM và gọi `getBoundingClientRect()` trên từng phần tử (xem hằng số toạ độ trong `renderCert()`,
+  đơn vị viewBox 993×651 nhân với `CERT_SCALE`) — không áng chừng từ ảnh chụp màn hình, vì file có tới
+  1441 nhóm `<g>` lồng nhau, đoán tay rất dễ sai vài chục px.
+- File SVG nặng ~1.3MB (chứa ảnh mask nhúng base64), chỉ tải 1 lần rồi trình duyệt cache lại.
+
+- Hiện ngay sau rương thưởng cuối cùng; xem lại ở thẻ vàng trên trang chủ, huy hiệu *Bậc Thầy EQ*, hoặc mục Tài khoản.
+- Học viên sửa được **tên in trên chứng nhận**, tải PNG hoặc chia sẻ (Web Share API).
+- Chứng nhận lưu trong tiến độ (`S.cert`) → đồng bộ theo tài khoản; backend ghi nhật ký sự kiện `certificate`
+  (kèm mã) để admin đối chiếu ở tab 📜 Nhật ký.
