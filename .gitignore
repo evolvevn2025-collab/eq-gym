@@ -32,5 +32,8 @@
 # Landing page đăng ký
 !/dangky/
 
+# Trang chuyển hướng cho link cũ /eq-gym/... (đã lỡ chia sẻ qua Zalo) -> domain gốc /
+!/eq-gym/
+
 # Không đẩy: tools/ (script dựng workbook, chỉ chạy trên máy dev có Word),
 # supabase/ (hệ backend cũ không còn dùng), docs/ (tài liệu/kế hoạch nội bộ)
