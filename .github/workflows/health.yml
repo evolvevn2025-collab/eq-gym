@@ -24,15 +24,21 @@ jobs:
       - name: App học viên
         run: |
           html=$(curl -fsSL --retry 3 --retry-delay 10 "$APP_URL?hc=$(date +%s)")
-          grep -q "CERT_MILESTONES" <<< "$html" || { echo "::error::App không tải đúng nội dung"; exit 1; }
-          key=$(grep -o 'SUPA_ANON="[^"]*"' <<< "$html" | cut -d'"' -f2 | sed -n 1p)
-          [ -n "$key" ] || { echo "::error::Không tìm thấy anon key trong app"; exit 1; }
-          echo "ANON=$key" >> "$GITHUB_ENV"
+          # Đang bật trang bảo trì (meta eqgym-status=maintenance) → coi là bình thường, chỉ ghi chú
+          if grep -q 'name="eqgym-status" content="maintenance"' <<< "$html"; then
+            echo "::notice::App đang ở chế độ bảo trì"
+          else
+            grep -q "CERT_MILESTONES" <<< "$html" || { echo "::error::App không tải đúng nội dung"; exit 1; }
+          fi
 
       - name: Trang Quản trị
         run: |
           html=$(curl -fsSL --retry 3 --retry-delay 10 "${APP_URL}admin/?hc=$(date +%s)")
           grep -q "viewOverview" <<< "$html" || { echo "::error::Trang Quản trị không tải đúng"; exit 1; }
+          # anon key (vốn công khai) lấy từ trang Quản trị — trang này vẫn chạy cả khi app bảo trì
+          key=$(grep -o 'SUPA_ANON="[^"]*"' <<< "$html" | cut -d'"' -f2 | sed -n 1p)
+          [ -n "$key" ] || { echo "::error::Không tìm thấy anon key trong trang Quản trị"; exit 1; }
+          echo "ANON=$key" >> "$GITHUB_ENV"
 
       - name: Database (giữ Supabase không bị tạm dừng)
         run: |
