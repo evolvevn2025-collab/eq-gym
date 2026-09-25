@@ -17,6 +17,9 @@
 !/dangky/index.html
 !/eq-gym/
 !/eq-gym/**
+!/.github/
+!/.github/**
 
 # Không đẩy: tools/ (script dựng workbook, chỉ chạy trên máy dev có Word),
 # supabase/ (hệ backend cũ không còn dùng), docs/ (tài liệu/kế hoạch nội bộ)
+# .github/ được phép: workflow backup database hằng ngày, health check, CI

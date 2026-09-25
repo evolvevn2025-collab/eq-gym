@@ -1,0 +1,51 @@
+# Kiểm tra code mỗi lần push / pull request: bắt lỗi cú pháp JavaScript trong các trang HTML
+# (app học viên, trang Quản trị, landing) và lỗi cú pháp TypeScript của Edge Functions
+# trước khi lỗi lên tới người dùng.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cú pháp JavaScript trong HTML
+        run: |
+          node - <<'EOF'
+          const fs = require('fs'), { execFileSync } = require('child_process'), os = require('os'), path = require('path');
+          const pages = ['eq-gym/index.html', 'eq-gym/admin/index.html', 'dangky/index.html', 'eq-gym/dangky/index.html'].filter(f => fs.existsSync(f));
+          let bad = 0;
+          for (const f of pages) {
+            const html = fs.readFileSync(f, 'utf8');
+            const js = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n;\n');
+            const tmp = path.join(os.tmpdir(), f.replace(/[\/\\]/g, '_') + '.js');
+            fs.writeFileSync(tmp, js);
+            try { execFileSync(process.execPath, ['--check', tmp], { stdio: 'pipe' }); console.log('OK  ', f); }
+            catch (e) { bad++; console.log(`::error file=${f}::Lỗi cú pháp JavaScript\n` + String(e.stderr || e.message)); }
+          }
+          if (!pages.length) { console.log('::error::Không tìm thấy trang HTML nào để kiểm tra'); process.exit(1); }
+          process.exit(bad ? 1 : 0);
+          EOF
+
+      - name: Cú pháp Edge Functions
+        if: hashFiles('supabase/functions/**/index.ts') != ''
+        run: |
+          for f in supabase/functions/*/index.ts; do
+            npx --yes esbuild@0.23.1 "$f" --loader:.ts=ts --log-level=error > /dev/null \
+              && echo "OK   $f" || { echo "::error file=$f::Lỗi cú pháp TypeScript"; exit 1; }
+          done

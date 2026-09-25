@@ -1,0 +1,50 @@
+# Kiểm tra hệ thống 6 tiếng/lần: app + trang Quản trị mở được, database trả lời, webhook SePay
+# còn cấu hình. Lỗi → workflow đỏ → GitHub gửi email cho chủ repo.
+# Lần gọi database cũng giữ cho Supabase (gói miễn phí) không tự tạm dừng sau 7 ngày không hoạt động.
+# Không cần secret: anon key vốn công khai trong app, đọc thẳng từ trang live.
+
+name: Health check
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      APP_URL: https://app.evolve.vn/eq-gym/
+      SUPA_URL: https://dpzlwlaekhfmorckukfm.supabase.co
+    steps:
+      - name: App học viên
+        run: |
+          html=$(curl -fsSL --retry 3 --retry-delay 10 "$APP_URL?hc=$(date +%s)")
+          echo "$html" | grep -q "CERT_MILESTONES" || { echo "::error::App không tải đúng nội dung"; exit 1; }
+          key=$(echo "$html" | grep -o 'SUPA_ANON="[^"]*"' | head -1 | cut -d'"' -f2)
+          [ -n "$key" ] || { echo "::error::Không tìm thấy anon key trong app"; exit 1; }
+          echo "ANON=$key" >> "$GITHUB_ENV"
+
+      - name: Trang Quản trị
+        run: |
+          curl -fsSL --retry 3 --retry-delay 10 "${APP_URL}admin/?hc=$(date +%s)" | grep -q "viewOverview" \
+            || { echo "::error::Trang Quản trị không tải đúng"; exit 1; }
+
+      - name: Database (giữ Supabase không bị tạm dừng)
+        run: |
+          code=$(curl -s -o /tmp/r.json -w "%{http_code}" --retry 3 --retry-delay 10 \
+            -X POST "$SUPA_URL/rest/v1/rpc/book_seats_taken" \
+            -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{}')
+          [ "$code" = "200" ] || { echo "::error::Database trả về HTTP $code"; exit 1; }
+
+      - name: Webhook SePay
+        run: |
+          curl -fsS --retry 3 --retry-delay 10 "$SUPA_URL/functions/v1/sepay-webhook" | grep -q '"configured":true' \
+            || { echo "::error::Webhook SePay chưa cấu hình hoặc không chạy — học viên thanh toán sẽ không tự mở Premium"; exit 1; }
+
+      - name: Tổng kết
+        run: echo "✅ App, Quản trị, database, webhook SePay đều bình thường — $(TZ=Asia/Ho_Chi_Minh date '+%d/%m/%Y %H:%M')" >> "$GITHUB_STEP_SUMMARY"

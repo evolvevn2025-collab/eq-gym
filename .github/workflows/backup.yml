@@ -1,0 +1,103 @@
+# Backup database Supabase hằng ngày (02:00 giờ Việt Nam) — mã hoá AES-256 rồi lưu thành
+# artifact của lần chạy, giữ 90 ngày. Repo đang công khai nên KHÔNG commit backup vào repo
+# và KHÔNG in dữ liệu ra log (log của repo công khai ai cũng xem được).
+#
+# Cần 2 secret (Settings → Secrets and variables → Actions → New repository secret):
+#   SUPABASE_DB_URL     postgresql://postgres.dpzlwlaekhfmorckukfm:<MẬT KHẨU DB>@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
+#                       (Supabase → Project Settings → Database → Connection string → Session pooler;
+#                        không dùng db.<ref>.supabase.co vì máy GitHub không có IPv6)
+#   BACKUP_PASSPHRASE   chuỗi bí mật dùng để mã hoá — MẤT LÀ KHÔNG GIẢI MÃ ĐƯỢC BACKUP, lưu vào trình quản lý mật khẩu.
+#
+# Khôi phục (khi cần):
+#   1. Actions → "Backup database" → chọn lần chạy → tải artifact eqgym-backup-YYYYMMDD-HHMM
+#   2. gpg --batch --pinentry-mode loopback --passphrase "<BACKUP_PASSPHRASE>" -d eqgym-backup-*.tar.gz.gpg | tar xz
+#   3. Vào project Supabase mới/trống, chạy lần lượt (psql, chuỗi kết nối của project đích):
+#        psql "$DB" -f roles.sql
+#        psql "$DB" -f schema.sql
+#        psql "$DB" -c "SET session_replication_role = replica" -f data.sql      (và auth_data.sql nếu có)
+#      rồi deploy lại Edge Functions + secrets (supabase/functions) như lúc đầu.
+
+name: Backup database
+
+on:
+  schedule:
+    - cron: "0 19 * * *"   # 19:00 UTC = 02:00 giờ Việt Nam
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - name: Kiểm tra secret
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "::error::Thiếu secret SUPABASE_DB_URL hoặc BACKUP_PASSPHRASE — xem hướng dẫn ở đầu file .github/workflows/backup.yml"
+            exit 1
+          fi
+          if [ ${#BACKUP_PASSPHRASE} -lt 20 ]; then
+            echo "::error::BACKUP_PASSPHRASE quá ngắn (cần ≥ 20 ký tự)"; exit 1
+          fi
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Dump database
+        run: |
+          mkdir -p dump && cd dump
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f roles.sql --role-only
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f schema.sql
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f data.sql --data-only --use-copy
+          # Tài khoản đăng nhập (auth.users): nếu bản data mặc định chưa có thì dump riêng
+          if ! grep -q 'COPY "auth"."users"' data.sql; then
+            supabase db dump --db-url "$SUPABASE_DB_URL" -f auth_data.sql --data-only --use-copy -s auth
+          fi
+
+      - name: Kiểm tra bản backup đủ dữ liệu
+        working-directory: dump
+        run: |
+          fail=0
+          for t in profiles payments progress practices vouchers settings; do
+            if ! grep -q "COPY \"public\".\"$t\"" data.sql; then echo "::error::Thiếu bảng public.$t trong backup"; fail=1; fi
+          done
+          if ! cat data.sql auth_data.sql 2>/dev/null | grep -q 'COPY "auth"."users"'; then echo "::error::Thiếu auth.users trong backup"; fail=1; fi
+          grep -q 'CREATE TABLE' schema.sql || { echo "::error::schema.sql rỗng"; fail=1; }
+          [ "$fail" = 0 ] || exit 1
+          # Chỉ in kích thước file, KHÔNG in nội dung (log công khai)
+          {
+            echo "### Backup $(TZ=Asia/Ho_Chi_Minh date '+%d/%m/%Y %H:%M') (giờ VN)"
+            echo ""
+            echo "| File | Dung lượng |"; echo "|---|---|"
+            for f in *.sql; do echo "| $f | $(du -h "$f" | cut -f1) |"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Nén + mã hoá
+        id: pack
+        run: |
+          stamp=$(TZ=Asia/Ho_Chi_Minh date '+%Y%m%d-%H%M')
+          tar czf backup.tar.gz -C dump .
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" \
+              --symmetric --cipher-algo AES256 -o "eqgym-backup-$stamp.tar.gz.gpg" backup.tar.gz
+          # Thử giải mã lại ngay để chắc chắn file dùng được
+          gpg --batch --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" -d "eqgym-backup-$stamp.tar.gz.gpg" | tar tz > /dev/null
+          rm -rf dump backup.tar.gz
+          echo "name=eqgym-backup-$stamp" >> "$GITHUB_OUTPUT"
+          echo "file=eqgym-backup-$stamp.tar.gz.gpg" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}
+          path: ${{ steps.pack.outputs.file }}
+          retention-days: 90
+          if-no-files-found: error
