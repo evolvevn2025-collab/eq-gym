@@ -71,7 +71,7 @@ jobs:
           for t in profiles payments progress practices vouchers settings; do
             if ! grep -q "COPY \"public\".\"$t\"" data.sql; then echo "::error::Thiếu bảng public.$t trong backup"; fail=1; fi
           done
-          if ! cat data.sql auth_data.sql 2>/dev/null | grep -q 'COPY "auth"."users"'; then echo "::error::Thiếu auth.users trong backup"; fail=1; fi
+          if ! grep -qs 'COPY "auth"."users"' data.sql auth_data.sql; then echo "::error::Thiếu auth.users trong backup"; fail=1; fi
           grep -q 'CREATE TABLE' schema.sql || { echo "::error::schema.sql rỗng"; fail=1; }
           [ "$fail" = 0 ] || exit 1
           # Chỉ in kích thước file, KHÔNG in nội dung (log công khai)
