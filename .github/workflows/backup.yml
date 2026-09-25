@@ -49,6 +49,51 @@ jobs:
             echo "::error::BACKUP_PASSPHRASE quá ngắn (cần ≥ 20 ký tự)"; exit 1
           fi
 
+      # Chuẩn hoá chuỗi kết nối: bỏ dấu cách/ngoặc thừa, tự mã hoá URL mật khẩu có ký tự đặc biệt
+      # (@ # / ? : % …) — nguyên nhân hay gặp của lỗi "failed to parse connection string".
+      # Chỉ báo lỗi theo từng phần (user, host, port), KHÔNG in mật khẩu.
+      - name: Kiểm tra chuỗi kết nối
+        run: |
+          python3 - <<'PY'
+          import os, re, sys, urllib.parse as up
+          def err(m):
+              print("::error::SUPABASE_DB_URL: " + m); sys.exit(1)
+          s = os.environ["SUPABASE_DB_URL"].strip().strip('"').strip("'").strip()
+          if re.search(r"\s", s): err("có dấu cách hoặc xuống dòng ở giữa chuỗi — dán lại cho liền một dòng")
+          if not re.match(r"^postgres(ql)?://", s): err("phải bắt đầu bằng postgresql://")
+          if "@" not in s: err("thiếu phần @<host> — cần dạng postgresql://postgres.dpzlwlaekhfmorckukfm:<mật khẩu>@<host>:5432/postgres")
+          m = re.match(r"^postgres(?:ql)?://([^:/@]+):(.*)@([^@/:?]+)(?::(\d+))?(?:/([^?]*))?(\?.*)?$", s)
+          if not m: err("sai định dạng — cần postgresql://postgres.dpzlwlaekhfmorckukfm:<mật khẩu>@<host>:5432/postgres")
+          user, pw, host, port, db, query = m.groups()
+          if "YOUR-PASSWORD" in pw.upper(): err("vẫn còn chữ [YOUR-PASSWORD] — thay bằng mật khẩu database thật")
+          if pw.startswith("[") and pw.endswith("]"):
+              pw = pw[1:-1]; print("::notice::Đã bỏ dấu [ ] quanh mật khẩu")
+          if not pw: err("mật khẩu trống")
+          if host.startswith("db.") and host.endswith(".supabase.co"):
+              err("đang dùng Direct connection (" + host + ") — máy GitHub không có IPv6. Vào Supabase → Connect → chọn Session pooler")
+          if "pooler.supabase.com" in host and not user.startswith("postgres."):
+              err("user phải là postgres.dpzlwlaekhfmorckukfm (đang là '" + user + "')")
+          if port == "6543":
+              port = "5432"; print("::notice::Đổi cổng 6543 (Transaction pooler) → 5432 (Session pooler) để pg_dump chạy được")
+          pw = up.quote(up.unquote(pw), safe="")
+          url = "postgresql://%s:%s@%s:%s/%s%s" % (user, pw, host, port or "5432", db or "postgres", query or "")
+          print("::add-mask::" + pw); print("::add-mask::" + url)
+          open(os.environ["GITHUB_ENV"], "a").write("DB_URL=" + url + "\n")
+          print("Chuỗi kết nối hợp lệ: user=%s host=%s port=%s db=%s" % (user, host, port or "5432", db or "postgres"))
+          PY
+
+      - name: Thử kết nối database
+        run: |
+          if ! out=$(psql "$DB_URL" -tAc "select 'ok'" 2>&1); then
+            echo "::error::Không kết nối được database: $out"
+            case "$out" in
+              *"password authentication failed"*) echo "::error::→ Sai mật khẩu database. Reset ở Supabase → Project Settings → Database rồi cập nhật secret." ;;
+              *"Tenant or user not found"*) echo "::error::→ Sai host/region hoặc user. Copy lại nguyên chuỗi Session pooler ở Supabase → Connect." ;;
+            esac
+            exit 1
+          fi
+          echo "Kết nối database OK"
+
       - uses: supabase/setup-cli@v1
         with:
           version: latest
@@ -56,12 +101,12 @@ jobs:
       - name: Dump database
         run: |
           mkdir -p dump && cd dump
-          supabase db dump --db-url "$SUPABASE_DB_URL" -f roles.sql --role-only
-          supabase db dump --db-url "$SUPABASE_DB_URL" -f schema.sql
-          supabase db dump --db-url "$SUPABASE_DB_URL" -f data.sql --data-only --use-copy
+          supabase db dump --db-url "$DB_URL" -f roles.sql --role-only
+          supabase db dump --db-url "$DB_URL" -f schema.sql
+          supabase db dump --db-url "$DB_URL" -f data.sql --data-only --use-copy
           # Tài khoản đăng nhập (auth.users): nếu bản data mặc định chưa có thì dump riêng
           if ! grep -q 'COPY "auth"."users"' data.sql; then
-            supabase db dump --db-url "$SUPABASE_DB_URL" -f auth_data.sql --data-only --use-copy -s auth
+            supabase db dump --db-url "$DB_URL" -f auth_data.sql --data-only --use-copy -s auth
           fi
 
       - name: Kiểm tra bản backup đủ dữ liệu
