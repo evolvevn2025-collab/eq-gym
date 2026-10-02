@@ -38,9 +38,10 @@ let UI={
   usersSearch:'', usersSort:'created_desc', usersPage:0, usersRole:'all', usersStatus:'all', usersTier:'all',
   vouchersSearch:'', vouchersSort:'date_desc', vouchersPage:0, editVoucherId:null,
   txSearch:'', txSort:'date_desc', txPage:0, txStatus:'all', txMethod:'all', txPeriod:'all',
-  affStatus:'pending', affSearch:'', affPage:0, affBusy:false
+  affStatus:'pending', affSearch:'', affPage:0, affBusy:false,
+  actDays:14, stageSel:null, stageActive:'all', stagePage:0
 };
-let DATA={dash:null,vouchers:null,users:null,usersTotal:0,tx:null,txTotal:0,txSum:null,user:null,aff:null,affTotal:0,affStats:null,settings:null};
+let DATA={dash:null,vouchers:null,users:null,usersTotal:0,tx:null,txTotal:0,txSum:null,user:null,aff:null,affTotal:0,affStats:null,settings:null,act:null,actErr:'',stages:null,stagesErr:'',stageUsers:null,userUsage:null};
 let MSG='';
 let _txSeq=0, _usersSeq=0;
 
@@ -98,6 +99,7 @@ async function loadAll(){
   if(UI.view==='tx') await loadTx();
   if(UI.view==='user'&&UI.userId) await loadUserDetail(UI.userId);
   if(UI.view==='affiliate') loadAffiliate();
+  if(UI.view==='activity') loadActivity();
 }
 /* Đơn QR bỏ dở quá hạn → đóng cho khỏi treo "Đang chờ" (SePay vẫn khớp được nếu tiền về trễ) */
 async function expireStaleOrders(){
@@ -141,7 +143,7 @@ async function loadUsers(){
 }
 function setUsersFilter(k,v){ UI[k]=v; UI.usersPage=0; DATA.users=null; render(); loadUsers(); }
 async function loadUserDetail(id){ try{ const {data,error}=await sb.rpc('admin_user_detail',{p_user:id}); if(error) throw error; DATA.user=data||{missing:true}; }catch(e){ DATA.user={error:e.message}; } render(); }
-function openUser(id){ if(!id) return; UI.view='user'; UI.userId=id; UI.histMore=30; DATA.user=null; render(); window.scrollTo(0,0); loadUserDetail(id); }
+function openUser(id){ if(!id) return; UI.view='user'; UI.userId=id; UI.histMore=30; DATA.user=null; DATA.userUsage=null; render(); window.scrollTo(0,0); loadUserDetail(id); loadUserUsage(id); }
 function afterUserChange(){ if(UI.view==='user'&&UI.userId) loadUserDetail(UI.userId); else loadUsers(); }
 function refocus(id){ const el=$(id); if(el){ el.focus(); const v=el.value; el.value=''; el.value=v; } }
 function renderKeepFocus(id){ render(); refocus(id); }
@@ -241,7 +243,7 @@ async function grantPremium(uid){
 }
 async function banUser(uid,currentlyBanned){ if(!confirm(currentlyBanned?'Mở khoá tài khoản này?':'Khoá tài khoản này? Học viên sẽ không đăng nhập/luyện tập được nữa.')) return; try{ const {error}=await sb.rpc('admin_set_banned',{p_user_id:uid,p_banned:!currentlyBanned}); if(error) throw error; afterUserChange(); }catch(e){ alert('Lỗi: '+e.message); } }
 
-function nav(v){ UI.view=v; render(); window.scrollTo(0,0); if(v==='affiliate'&&DATA.aff==null) loadAffiliate(); if(v==='tx'&&DATA.tx==null) loadTx(); if(v==='users'&&DATA.users==null) loadUsers(); if(v==='overview') loadDashboard(); }
+function nav(v){ UI.view=v; render(); window.scrollTo(0,0); if(v==='affiliate'&&DATA.aff==null) loadAffiliate(); if(v==='tx'&&DATA.tx==null) loadTx(); if(v==='users'&&DATA.users==null) loadUsers(); if(v==='overview') loadDashboard(); if(v==='activity') loadActivity(); }
 
 /* ===== Affiliate: cấu hình + duyệt/chi hoa hồng ===== */
 const AFF_TIERS=[['standard','Cá nhân / học viên',0.2],['partner','Tổ chức, đối tác',0.4],['trusted','Đối tác tin cậy',0.6]];
@@ -330,7 +332,7 @@ function header(title,sub){
   </div>`;
 }
 function bottomNav(){
-  const items=[['overview','◧','Tổng quan'],['tx','₫','Giao dịch'],['vouchers','🏷️','Voucher'],['affiliate','🤝','Affiliate'],['users','👥','Học viên']];
+  const items=[['overview','◧','Tổng quan'],['activity','📈','Hoạt động'],['tx','₫','Giao dịch'],['vouchers','🏷️','Voucher'],['affiliate','🤝','Affiliate'],['users','👥','Học viên']];
   const pend=(DATA.dash&&DATA.dash.orders_other&&DATA.dash.orders_other.pending)||0;
   let h=`<div style="position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(255,255,255,.97);backdrop-filter:blur(14px);border-top:1px solid #E3E8EE;display:flex;padding:6px 0 calc(env(safe-area-inset-bottom) + 8px);z-index:40">`;
   items.forEach(it=>{ const active=UI.view===it[0]||(it[0]==='users'&&UI.view==='user');
@@ -390,6 +392,125 @@ function kpi(label,value,sub,color){ return `<div style="background:#fff;border:
   <div style="font-size:10.5px;color:#5C6B7A;font-weight:800;text-transform:uppercase;letter-spacing:.4px">${label}</div>
   <div style="font-family:'Space Grotesk';font-size:22px;font-weight:700;margin-top:3px;color:${color||'#0F1923'}">${value}</div>
   ${sub?`<div style="font-size:11px;color:#8A97A5;font-weight:700;margin-top:2px;line-height:1.35">${sub}</div>`:''}</div>`; }
+
+/* ===== HOẠT ĐỘNG: học viên đang ở giai đoạn nào, rớt ở bài nào, thời gian ở từng màn hình ===== */
+const STAGES=[
+  ['login_only','Mới đăng nhập, chưa làm gì','#E0930A'],
+  ['test_only','Đã làm test EQ, chưa vào bài','#E0930A'],
+  ['started','Đã bắt đầu bài đầu, chưa xong','#E0930A'],
+  ['learning_free','Đang học bài miễn phí (0–2)','#0FB89B'],
+  ['paywall','Hết bài miễn phí, chưa mua','#C74848'],
+  ['premium_idle','Premium nhưng chưa học','#E0930A'],
+  ['premium_learning','Premium đang học','#0A8C77'],
+  ['completed','Hoàn thành 30 buổi','#4A9EFF']];
+const SCREEN_LABELS={home:'Lộ trình (trang chính)',quiz:'Test EQ',journal:'Nhật ký',chat:'Coach',rank:'Thi đua',aff:'Dashboard affiliate',settings:'Tài khoản',paywall:'Màn nâng cấp Premium',checkout:'Thanh toán',other:'Khác'};
+const KIND_LABELS={intro:'Giới thiệu / video',comic:'Truyện tranh',content:'Nội dung bài',workbook:'Workbook',practice:'Luyện tập',finish:'Kết thúc',x:'Khác'};
+function screenLabel(k){ const m=/^l(\d+)\.(.+)$/.exec(k||''); return m?('Bài '+m[1]+' · '+(KIND_LABELS[m[2]]||m[2])):(SCREEN_LABELS[k]||k); }
+function fmtDur(s){ s=Math.round(+s||0); if(s<60) return s+' giây'; const m=Math.floor(s/60), r=s%60; if(m<60) return m+' phút'+(r?' '+r+'s':''); return Math.floor(m/60)+'g '+(m%60)+'p'; }
+const pc=(a,b)=>b>0?Math.round(a/b*100)+'%':'—';
+let _stSeq=0;
+async function loadAct(){ try{ const {data,error}=await sb.rpc('admin_activity',{p_days:UI.actDays}); if(error) throw error; DATA.act=data; DATA.actErr=''; }catch(e){ DATA.act=null; DATA.actErr=e.message||'Lỗi'; } render(); }
+async function loadStages(){ try{ const {data,error}=await sb.rpc('admin_stages'); if(error) throw error; DATA.stages=data; DATA.stagesErr=''; }catch(e){ DATA.stages=null; DATA.stagesErr=e.message||'Lỗi'; } render(); if(UI.stageSel) loadStageUsers(); }
+function loadActivity(){ loadAct(); loadStages(); }
+function setActDays(d){ UI.actDays=d; DATA.act=null; render(); loadAct(); }
+function pickStage(k){ UI.stageSel=(UI.stageSel===k?null:k); UI.stagePage=0; DATA.stageUsers=null; render(); if(UI.stageSel) loadStageUsers(); }
+function setStageActive(v){ UI.stageActive=v; UI.stagePage=0; DATA.stageUsers=null; render(); loadStageUsers(); }
+function stagePageGo(d){ const maxPage=Math.max(0,Math.ceil((DATA.stageUsers?DATA.stageUsers.total:0)/PAGE_SIZE)-1); UI.stagePage=Math.min(maxPage,Math.max(0,UI.stagePage+d)); loadStageUsers(); }
+async function loadStageUsers(){ const seq=++_stSeq; try{ const {data,error}=await sb.rpc('admin_stage_users',{p_stage:UI.stageSel,p_active:UI.stageActive,p_limit:PAGE_SIZE,p_offset:UI.stagePage*PAGE_SIZE}); if(error) throw error; if(seq!==_stSeq) return; DATA.stageUsers=data; }catch(e){ if(seq!==_stSeq) return; DATA.stageUsers={total:0,rows:[],error:e.message}; } render(); }
+async function loadUserUsage(id){ try{ const {data,error}=await sb.rpc('admin_user_usage',{p_user:id}); if(error) throw error; DATA.userUsage={id,data}; }catch(e){ DATA.userUsage={id,data:null}; } if(UI.view==='user'&&UI.userId===id) render(); }
+function setupMsg(what){ return card(`<p style="margin:0;font-size:12.5px;color:#C74848;font-weight:700;line-height:1.6">${what}: chưa tải được. Có thể migration <b>20261003000000_activity_analytics</b> chưa được áp lên Supabase (chạy <code>supabase db push</code>).<br><span style="color:#8A97A5;font-weight:600">${esc(DATA.actErr||DATA.stagesErr||'')}</span></p>`); }
+function stageSection(){
+  const s=DATA.stages;
+  if(!s) return DATA.stagesErr?setupMsg('Giai đoạn học viên'):card(`<p style="margin:0;color:#8A97A5;font-size:12.5px;font-weight:600">Đang tải...</p>`);
+  const total=s.total||0, by={}; (s.stages||[]).forEach(x=>by[x.stage]=x);
+  let h=secTitle('Học viên đang ở giai đoạn nào',`<span style="font-size:11px;color:#8A97A5;font-weight:700">${fmt(total)} người</span>`);
+  h+=`<p style="margin:-2px 2px 8px;font-size:11.5px;color:#8A97A5;font-weight:600">Bấm vào từng giai đoạn để xem danh sách người và nhắn đúng nhóm.</p><div style="display:flex;flex-direction:column;gap:8px">`;
+  STAGES.forEach(([k,label,color])=>{ const x=by[k]||{users:0,active:0,idle_days:null}, sel=UI.stageSel===k;
+    h+=`<button onclick="pickStage('${k}')" style="text-align:left;background:#fff;border:1.5px solid ${sel?color:'#E3E8EE'};border-radius:14px;padding:11px 13px;cursor:pointer;display:block;width:100%">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span style="font-size:13px;font-weight:800;color:#0F1923">${label}</span><span style="font-family:'Space Grotesk';font-weight:700;font-size:15px;color:${color}">${fmt(x.users)} <small style="font-size:11px;color:#8A97A5">(${pc(x.users,total)})</small></span></div>
+      <div style="height:6px;background:#EEF2F6;border-radius:4px;margin-top:7px;overflow:hidden"><i style="display:block;height:100%;width:${total?Math.round(x.users/total*100):0}%;background:${color}"></i></div>
+      <div style="font-size:11px;color:#8A97A5;font-weight:700;margin-top:6px">Còn hoạt động 7 ngày: <b style="color:#0A6E5D">${fmt(x.active)}</b> · Đã im: <b style="color:#C74848">${fmt(x.users-x.active)}</b>${x.idle_days!=null?' · TB '+x.idle_days+' ngày chưa quay lại':''}</div></button>`; });
+  h+=`</div>`;
+  if(UI.stageSel){ const st=STAGES.find(x=>x[0]===UI.stageSel), su=DATA.stageUsers;
+    h+=secTitle('Danh sách: '+(st?st[1]:''),su?`<span style="font-size:11px;color:#8A97A5;font-weight:700">${fmt(su.total)} người</span>`:'');
+    h+=`<div style="display:flex;gap:6px;margin-bottom:8px;overflow-x:auto">${[['all','Tất cả'],['active','Còn hoạt động 7 ngày'],['idle','Đã im > 7 ngày']].map(([v,l])=>chip(l,UI.stageActive===v,`setStageActive('${v}')`)).join('')}</div>`;
+    if(!su) h+=card(`<p style="margin:0;color:#8A97A5;font-size:12.5px;font-weight:600">Đang tải...</p>`);
+    else if(su.error) h+=card(`<p style="margin:0;color:#C74848;font-size:12.5px;font-weight:700">${esc(su.error)}</p>`);
+    else if(!su.rows.length) h+=card(`<p style="margin:0;color:#8A97A5;font-size:12.5px;font-weight:600">Không có ai.</p>`);
+    else { h+=su.rows.map(r=>`<button onclick="openUser('${r.id}')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;text-align:left;background:#fff;border:1px solid #E3E8EE;border-radius:12px;padding:10px 12px;margin-bottom:6px;cursor:pointer">
+        <span style="min-width:0"><span style="display:block;font-size:12.5px;font-weight:800;color:#0F1923;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name||r.email||'—')}</span>
+          <span style="display:block;font-size:11px;color:#8A97A5;font-weight:700;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name?r.email:'')}${r.name?' · ':''}Đăng ký ${fd(r.created_at)} · Hoạt động ${ago(r.last_active)}</span></span>
+        <span style="flex:0 0 auto;text-align:right;font-size:11px;font-weight:800;color:#5C6B7A">${r.done_count}/30 buổi${r.premium?'<br>'+pill('Premium','good'):''}</span></button>`).join('');
+      h+=pager(UI.stagePage,su.total,PAGE_SIZE,'stagePageGo(-1)','stagePageGo(1)'); }
+  }
+  return h;
+}
+function lessonSection(){
+  const s=DATA.stages; if(!s||!s.lessons) return '';
+  const hd=(t,al)=>`<div style="font-size:9.5px;color:#8A97A5;font-weight:800;text-align:${al||'right'}">${t}</div>`;
+  let h=secTitle('Từng bài: rớt ở đâu',`<span style="font-size:11px;color:#8A97A5;font-weight:700">% rớt = chưa xong / đã mở</span>`);
+  let rows=`<div style="display:grid;grid-template-columns:34px repeat(5,1fr) 52px;gap:4px;padding-bottom:6px;border-bottom:1px solid #E3E8EE">${hd('Bài','left')}${hd('Đã mở')}${hd('Bắt đầu')}${hd('Được chấm')}${hd('Xong')}${hd('Kẹt >3 ngày')}${hd('% rớt')}</div>`;
+  s.lessons.forEach(l=>{ const drop=l.reached>0?Math.round((1-l.done/l.reached)*100):null, bad=l.reached>=5&&drop!=null&&drop>=50;
+    rows+=`<div style="display:grid;grid-template-columns:34px repeat(5,1fr) 52px;gap:4px;padding:6px 0;border-bottom:1px solid #F0F3F6;font-size:11.5px;font-weight:700;align-items:center;${bad?'background:#FFF7F7':''}">
+      <div style="font-weight:800">${l.n}</div><div style="text-align:right">${l.reached}</div><div style="text-align:right">${l.started}</div><div style="text-align:right">${l.graded}</div>
+      <div style="text-align:right;color:#0A6E5D;font-weight:800">${l.done}</div><div style="text-align:right;color:${l.stuck?'#E0930A':'#8A97A5'}">${l.stuck}${l.paywall?`<br><span title="Chờ mua Premium" style="color:#C74848;font-size:10px;white-space:nowrap">+${l.paywall} 💳</span>`:''}</div>
+      <div style="text-align:right;font-weight:800;color:${bad?'#C74848':'#5C6B7A'}">${drop==null?'—':drop+'%'}</div></div>`; });
+  h+=card(rows+`<p style="margin:8px 0 0;font-size:10.5px;color:#8A97A5;font-weight:600;line-height:1.55">Đã mở = xong bài trước. Kẹt = đã mở, chưa xong, im &gt; 3 ngày. 💳 = đã xong bài 2, chưa mua Premium nên không mở được bài này. Dòng nền đỏ = rớt ≥ 50% (từ 5 người trở lên).</p>`);
+  return h;
+}
+function cohortSection(){
+  const s=DATA.stages; if(!s||!s.cohorts||!s.cohorts.length) return '';
+  const hd=(t,al)=>`<div style="font-size:9.5px;color:#8A97A5;font-weight:800;text-align:${al||'right'}">${t}</div>`;
+  let h=secTitle('Theo tuần đăng ký (8 tuần)',`<span style="font-size:11px;color:#8A97A5;font-weight:700">% trên số đăng ký</span>`);
+  let rows=`<div style="display:grid;grid-template-columns:44px 36px repeat(5,1fr);gap:4px;padding-bottom:6px;border-bottom:1px solid #E3E8EE">${hd('Tuần','left')}${hd('Người')}${hd('Làm test')}${hd('Vào bài')}${hd('Xong bài 0')}${hd('Hết miễn phí')}${hd('Premium')}</div>`;
+  s.cohorts.forEach(c=>{ rows+=`<div style="display:grid;grid-template-columns:44px 36px repeat(5,1fr);gap:4px;padding:6px 0;border-bottom:1px solid #F0F3F6;font-size:11.5px;font-weight:700"><div style="font-weight:800">${c.d}</div><div style="text-align:right">${c.users}</div>${[c.tested,c.started,c.lesson0,c.paywall,c.premium].map(v=>`<div style="text-align:right">${pc(v,c.users)}</div>`).join('')}</div>`; });
+  return h+card(rows);
+}
+function timeSection(a){
+  const nd=a.by_screen.length+a.by_kind.length+a.by_lesson.length===0;
+  let h=secTitle('Thời gian ở từng màn hình',`<span style="font-size:11px;color:#8A97A5;font-weight:700">${a.range_days} ngày gần nhất</span>`);
+  if(nd) return h+card(`<p style="margin:0;color:#8A97A5;font-size:12.5px;font-weight:600;line-height:1.6">Chưa có dữ liệu thời gian. Số liệu bắt đầu thu từ khi bản app mới (có đo hoạt động) chạy trên bản live — vài ngày sau sẽ đầy đủ.</p>`);
+  const rowS=(label,secs,users,views)=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #F0F3F6;font-size:12px;font-weight:700"><span style="min-width:0">${esc(label)}</span><span style="flex:0 0 auto;text-align:right;color:#5C6B7A">TB <b style="color:#0F1923">${fmtDur(users?secs/users:0)}</b>/người · ${fmt(users)} người${views?' · '+fmt(views)+' lượt':''}</span></div>`;
+  h+=card(`<div style="font-size:11px;font-weight:800;color:#5C6B7A;margin-bottom:2px">Màn hình chính</div>`+a.by_screen.map(r=>rowS(screenLabel(r.screen),r.secs,r.users,r.views)).join(''));
+  if(a.by_kind.length) h+=card(`<div style="font-size:11px;font-weight:800;color:#5C6B7A;margin-bottom:2px">Các bước trong bài học (gộp mọi bài)</div>`+a.by_kind.map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #F0F3F6;font-size:12px;font-weight:700"><span>${esc(KIND_LABELS[r.kind]||r.kind)}</span><span style="text-align:right;color:#5C6B7A">TB <b style="color:#0F1923">${fmtDur(r.views?r.secs/r.views:0)}</b>/lượt · ${fmtDur(r.users?r.secs/r.users:0)}/người · ${fmt(r.users)} người</span></div>`).join(''));
+  if(a.by_lesson.length){ const mx=Math.max(1,...a.by_lesson.map(r=>r.users?r.secs/r.users:0));
+    h+=card(`<div style="font-size:11px;font-weight:800;color:#5C6B7A;margin-bottom:6px">Thời gian TB mỗi người, theo bài</div>`+a.by_lesson.map(r=>{ const avg=r.users?r.secs/r.users:0; return `<div style="display:grid;grid-template-columns:44px 1fr 92px;gap:8px;align-items:center;padding:4px 0;font-size:11.5px;font-weight:700"><span>Bài ${r.n}</span><span style="height:8px;background:#EEF2F6;border-radius:4px;overflow:hidden"><i style="display:block;height:100%;width:${Math.round(avg/mx*100)}%;background:#0FB89B"></i></span><span style="text-align:right;color:#5C6B7A">${fmtDur(avg)} · ${r.users}p</span></div>`; }).join('')); }
+  return h;
+}
+function viewActivity(){
+  const a=DATA.act;
+  let h=header('Hoạt động','Học viên đang kẹt ở đâu')+`<div style="padding:0 16px 96px">`;
+  h+=`<div style="display:flex;gap:6px;margin:10px 0 0">${[7,14,30].map(d=>chip(d+' ngày',UI.actDays===d,`setActDays(${d})`)).join('')}</div>`;
+  if(!a){ h+=DATA.actErr?setupMsg('Hoạt động theo ngày'):card(`<p style="margin:0;color:#8A97A5;font-size:12.5px;font-weight:600">Đang tải...</p>`,'margin-top:12px'); }
+  else {
+    const k=a.kpi||{}, since=a.tracking_since?fd(a.tracking_since):null;
+    h+=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+      ${kpi('Dùng app hôm nay',fmt(k.dau_today),pc(k.dau_today,k.learners)+' / '+fmt(k.learners)+' học viên','#0A6E5D')}
+      ${kpi('Dùng app 7 ngày',fmt(k.wau),pc(k.wau,k.learners)+' học viên')}
+      ${kpi('Dùng app 30 ngày',fmt(k.mau),pc(k.mau,k.learners)+' học viên')}
+      ${kpi('TB mỗi ngày dùng',fmtDur(k.avg_secs_7d),'mỗi người, 7 ngày qua')}
+      ${kpi('Quay lại ≥ 2 ngày',fmt(k.returning_7d),'trong 7 ngày qua')}
+      ${kpi('Bắt đầu đo từ',since||'chưa có','số người dùng + thời gian')}
+    </div>`;
+    h+=secTitle('Người dùng app mỗi ngày',`<span style="font-size:11px;color:#8A97A5;font-weight:700">${since?'đo từ '+since:'chưa có dữ liệu'}</span>`);
+    h+=card(barChart(a.daily,'dau','#0FB89B',v=>v+' người')+(since?'':`<p style="margin:8px 0 0;font-size:11px;color:#8A97A5;font-weight:600">Chưa có số liệu: cần bản app mới chạy trên bản live.</p>`));
+    h+=secTitle('Làm bài luyện tập mỗi ngày',`<span style="font-size:11px;color:#8A97A5;font-weight:700">tính từ dữ liệu cũ</span>`);
+    h+=card(barChart(a.daily,'practicers','#4A9EFF',v=>v+' người'));
+    h+=secTitle('Làm test EQ mỗi ngày',`<span style="font-size:11px;color:#8A97A5;font-weight:700">tính từ dữ liệu cũ</span>`);
+    h+=card(barChart(a.daily,'testers','#E0930A',v=>v+' người'));
+  }
+  h+=stageSection()+lessonSection()+(a?timeSection(a):'')+cohortSection();
+  return h+`</div>`;
+}
+function userUsageCard(){
+  const u=DATA.userUsage; if(!u||u.id!==UI.userId) return '';
+  let h=secTitle('Hoạt động 14 ngày',u.data?`<span style="font-size:11px;color:#8A97A5;font-weight:700">${u.data.active_days_30} ngày dùng / 30 · ${fmtDur(u.data.total_secs_30)}</span>`:'');
+  if(!u.data) return h+card(`<p style="margin:0;color:#8A97A5;font-size:12.5px;font-weight:600">Chưa có dữ liệu thời gian.</p>`);
+  const d=u.data;
+  h+=card((d.total_secs_30?barChart(d.days.map(x=>({d:x.d,secs:x.secs})),'secs','#0FB89B',fmtDur):`<p style="margin:0;color:#8A97A5;font-size:12.5px;font-weight:600">Chưa ghi nhận thời gian dùng app.</p>`)
+    +(d.top&&d.top.length?`<div style="margin-top:10px">${d.top.map(t=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #F0F3F6;font-size:12px;font-weight:700"><span>${esc(screenLabel(t.screen))}</span><span style="color:#5C6B7A">${fmtDur(t.secs)} · ${fmt(t.views)} lượt</span></div>`).join('')}</div>`:''));
+  return h;
+}
 
 /* ===== TỔNG QUAN ===== */
 function viewOverview(){
@@ -603,6 +724,7 @@ function viewUser(){
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;text-align:center">
       ${[['EP',fmt(g.bounty)],['Chuỗi hiện tại',(g.streak||0)+' ngày'],['Kỷ lục chuỗi',(st.bestStreak||g.streak||0)+' ngày'],['Ngày nghỉ phép',st.freezes!=null?st.freezes:'—'],['Bài luyện tập',x.practices_total],['Chứng nhận',Object.keys(g.certs||{}).length]].map(([k,v])=>`<div style="background:#F5F8FA;border-radius:12px;padding:8px 4px"><b style="display:block;font-family:'Space Grotesk';font-size:15px">${v}</b><span style="font-size:10px;color:#5C6B7A;font-weight:700">${k}</span></div>`).join('')}
     </div>`);
+  h+=userUsageCard();
   const ev=userTimeline(x);
   h+=secTitle('Lịch sử hoạt động',`<span style="font-size:11px;color:#8A97A5;font-weight:700">${ev.length} sự kiện</span>`);
   h+=card(ev.length?`<div style="position:relative;padding-left:4px">${ev.slice(0,UI.histMore).map(e=>`<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #F0F3F6">
@@ -676,6 +798,7 @@ function viewAffiliate(){
 function renderDashboard(){
   let main='';
   if(UI.view==='overview') main=viewOverview();
+  else if(UI.view==='activity') main=viewActivity();
   else if(UI.view==='tx') main=viewTx();
   else if(UI.view==='vouchers') main=viewVouchers();
   else if(UI.view==='affiliate') main=viewAffiliate();
