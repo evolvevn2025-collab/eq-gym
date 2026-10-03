@@ -21,7 +21,7 @@
     {
       "source": "/(eq-gym/)?dangky/(.*)",
       "headers": [
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://docs.google.com; object-src 'none'; base-uri 'none'; form-action 'self' https://docs.google.com; frame-ancestors 'none'; upgrade-insecure-requests" }
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests" }
       ]
     },
     {
@@ -38,9 +38,15 @@
       ]
     },
     {
-      "source": "/eq-gym/(comics|workbook|music|videos)/(.*)",
+      "source": "/eq-gym/(music|videos)/(.*)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=2592000" },
+        { "key": "X-Robots-Tag", "value": "noindex" }
+      ]
+    },
+    {
+      "source": "/eq-gym/(comics|workbook)/(.*)",
+      "headers": [
         { "key": "X-Robots-Tag", "value": "noindex" }
       ]
     }

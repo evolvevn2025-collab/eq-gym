@@ -653,7 +653,7 @@ function copyAppLink(){ let u=location.origin+location.pathname; try{ const r=lo
 function openAuth(){ openSettings(); }
 let _oauthBusy=false;
 async function signInGoogle(){ if(_oauthBusy) return; _oauthBusy=true; try{ await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.href.split('#')[0]}}); }catch(e){ _oauthBusy=false; toast('Lỗi Google: '+e.message); } }
-async function signOut(){ try{ await usageFlush(false); }catch(e){} try{ await sb.auth.signOut(); }catch(e){} AUTH=null; try{ localStorage.removeItem('eqgym_migrated'); }catch(e){} UI.settingsOpen=false; render(); toast('Đã đăng xuất'); }
+async function signOut(){ try{ await usageFlush(false); }catch(e){} try{ await sb.auth.signOut(); }catch(e){} clearAssetCookie(); AUTH=null; try{ localStorage.removeItem('eqgym_migrated'); }catch(e){} UI.settingsOpen=false; render(); toast('Đã đăng xuất'); }
 async function initAuth(){
   if(!BACKEND) return;
   /* Đăng nhập Google lỗi (bị huỷ/phiên gián đoạn) → mở sẵn khung đăng nhập, báo lỗi dễ hiểu */
@@ -661,8 +661,37 @@ async function initAuth(){
   const {data,error}=await sb.auth.getSession(); if(error){ console.error('getSession',error); toast('Lỗi đăng nhập: '+error.message); }
   await applySession(data.session); cleanAuthParams(); sb.auth.onAuthStateChange((_e,session)=>{ applySession(session); });
 }
-async function applySession(session){ if(session&&session.user){ USAGE.token=session.access_token||''; const u=session.user; let prof=null; try{ const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle(); prof=data; }catch(e){} if(!prof){ try{ await sb.from('profiles').upsert({id:u.id,email:u.email}); const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle(); prof=data; }catch(e){} } if(prof&&prof.banned){ try{ await sb.auth.signOut(); }catch(e){} AUTH=null; toast('Tài khoản của bạn đã bị khoá. Liên hệ admin để biết thêm.'); render(); return; } AUTH={id:u.id,email:u.email,premium_until:prof&&prof.premium_until,role:prof&&prof.role,pay_code:prof&&prof.pay_code,ref_code:prof&&prof.ref_code}; await migrateIfNeeded(); await pullRemote(); claimStoredRef(); } else { AUTH=null; UI.aff=null; USAGE.token=''; } render(); }
-async function refreshProfile(){ if(!BACKEND||!AUTH) return; try{ const {data}=await sb.from('profiles').select('premium_until,role,ref_code').eq('id',AUTH.id).maybeSingle(); if(data){ AUTH.premium_until=data.premium_until; AUTH.role=data.role; AUTH.ref_code=data.ref_code; } }catch(e){} }
+async function applySession(session){ if(session&&session.user){ USAGE.token=session.access_token||''; const u=session.user; let prof=null; try{ const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle(); prof=data; }catch(e){} if(!prof){ try{ await sb.from('profiles').upsert({id:u.id,email:u.email}); const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle(); prof=data; }catch(e){} } if(prof&&prof.banned){ try{ await sb.auth.signOut(); }catch(e){} AUTH=null; toast('Tài khoản của bạn đã bị khoá. Liên hệ admin để biết thêm.'); render(); return; } AUTH={id:u.id,email:u.email,premium_until:prof&&prof.premium_until,role:prof&&prof.role,pay_code:prof&&prof.pay_code,ref_code:prof&&prof.ref_code}; const _ac=ensureAssetCookie(true); await migrateIfNeeded(); await pullRemote(); claimStoredRef(); await Promise.race([_ac,new Promise(r=>setTimeout(r,2500))]); } else { AUTH=null; UI.aff=null; USAGE.token=''; } render(); }
+async function refreshProfile(){ if(!BACKEND||!AUTH) return; try{ const {data}=await sb.from('profiles').select('premium_until,role,ref_code').eq('id',AUTH.id).maybeSingle(); if(data){ AUTH.premium_until=data.premium_until; AUTH.role=data.role; AUTH.ref_code=data.ref_code; if(isPremium()) ensureAssetCookie(true); } }catch(e){} }
+
+/* ===== Thẻ xem nội dung Premium (cổng bảo vệ ở Vercel — xem docs/SECURITY.md) =====
+   Truyện tranh/workbook buổi 3+ chỉ được trả khi trình duyệt có cookie "thẻ" do /api/asset-session cấp (HttpOnly, sống 1 giờ,
+   chỉ cấp cho người Premium thật). App xin thẻ khi đăng nhập / vừa mua Premium và làm mới định kỳ; nếu một ảnh vẫn 403
+   (vd máy ngủ quá 1 giờ) thì xin lại và tải lại ảnh 1 lần. Khi cổng chưa bật thì việc này vô hại. */
+let _acT=0,_acP=null,_gfT=0;
+function ensureAssetCookie(force){
+  if(!BACKEND||!AUTH||!isPremium()) return Promise.resolve(false);
+  if(!force&&Date.now()-_acT<25*60*1000) return Promise.resolve(true);
+  if(_acP) return _acP;
+  _acP=(async()=>{ try{
+      const {data}=await sb.auth.getSession(); const tok=data&&data.session&&data.session.access_token; if(!tok) return false;
+      const ctrl=new AbortController(), to=setTimeout(()=>ctrl.abort(),8000);
+      const r=await fetch('/api/asset-session',{method:'POST',headers:{Authorization:'Bearer '+tok},credentials:'same-origin',signal:ctrl.signal}); clearTimeout(to);
+      if(r.ok){ _acT=Date.now(); return true; } return false;
+    }catch(e){ return false; } finally{ _acP=null; } })();
+  return _acP;
+}
+function clearAssetCookie(){ _acT=0; try{ fetch('/api/asset-session',{method:'DELETE',credentials:'same-origin',keepalive:true}).catch(()=>{}); }catch(e){} }
+window.addEventListener('error',function(e){
+  const im=e.target; if(!im||im.tagName!=='IMG') return;
+  const src=im.getAttribute('src')||''; if(!/(^|\/)(comics|workbook)\//.test(src)) return;
+  if(!im.dataset.gateRetry){ im.dataset.gateRetry='1';
+    /* nhiều ảnh lỗi cùng lúc → chỉ xin thẻ 1 lần (vừa xin <10 giây thì chỉ tải lại ảnh) */
+    (Date.now()-_acT>10000?ensureAssetCookie(true):Promise.resolve(true)).then(function(ok){ if(ok) im.setAttribute('src',src+(src.indexOf('?')<0?'?':'&')+'_g='+Date.now()); }); return; }
+  if(BACKEND&&AUTH&&isPremium()&&Date.now()-_gfT>60000){ _gfT=Date.now(); toast('Chưa tải được nội dung — hãy tải lại trang hoặc đăng nhập lại nhé'); }
+},true);
+setInterval(function(){ if(!document.hidden) ensureAssetCookie(); },5*60*1000);
+document.addEventListener('visibilitychange',function(){ if(!document.hidden) ensureAssetCookie(); });
 async function migrateIfNeeded(){ if(!BACKEND||!AUTH) return; try{ if(localStorage.getItem('eqgym_migrated')) return; }catch(e){ return; }
   /* Gộp tiến độ đã có trên server vào máy TRƯỚC khi đẩy lên. Trước đây đẩy trước → máy mới (dữ liệu rỗng) ghi đè
      tiến độ/EP/chuỗi trên server thành 0. Tải lỗi thì dừng, lần mở sau thử lại — tuyệt đối không đẩy khi chưa biết server có gì. */
@@ -1419,7 +1448,7 @@ let _pdfjsP=null; const _pdfDocs={};
 function loadPdfJs(){ if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib); if(_pdfjsP) return _pdfjsP;
   _pdfjsP=new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src=PDFJS_URL; const tm=setTimeout(()=>{ _pdfjsP=null; rej(new Error('pdfjs timeout')); },8000); sc.onload=()=>{ clearTimeout(tm); try{ window.pdfjsLib.GlobalWorkerOptions.workerSrc=PDFJS_WORKER; res(window.pdfjsLib); }catch(e){ rej(e); } }; sc.onerror=()=>{ clearTimeout(tm); _pdfjsP=null; rej(new Error('pdfjs load')); }; document.head.appendChild(sc); });
   return _pdfjsP; }
-async function wbDoc(n){ if(_pdfDocs[n]) return _pdfDocs[n]; const lib=await loadPdfJs(); const doc=await lib.getDocument({url:'workbook/bai-'+n+'.pdf?v='+WB_VER}).promise; _pdfDocs[n]=doc; return doc; }
+async function wbDoc(n){ if(_pdfDocs[n]) return _pdfDocs[n]; const lib=await loadPdfJs(); const url='workbook/bai-'+n+'.pdf?v='+WB_VER; let doc; try{ doc=await lib.getDocument({url}).promise; }catch(e){ if(!(await ensureAssetCookie(true))) throw e; doc=await lib.getDocument({url}).promise; } _pdfDocs[n]=doc; return doc; }
 let _zvTok=0,_zvT=null;
 function zvPaint(){ const z=UI.zv; if(!z||!z.pdf) return; const {box,img}=zvEls(); if(!box||!img||img.tagName!=='CANVAS') return;
   const bw=box.clientWidth,bh=box.clientHeight,ratio=z.ratio||(595/842); const fw=Math.max(50,Math.min(bw,bh*ratio)),fh=fw/ratio;

@@ -42,6 +42,14 @@ jobs:
           process.exit(bad ? 1 : 0);
           EOF
 
+      - name: Cú pháp cổng bảo vệ nội dung Premium (middleware + hàm API) và cấu hình Vercel
+        if: hashFiles('middleware.js') != ''
+        run: |
+          for f in middleware.js api/asset-session.js api/_lib/asset-gate.js; do
+            node --check "$f" && echo "OK   $f" || { echo "::error file=$f::Lỗi cú pháp JavaScript"; exit 1; }
+          done
+          node -e "JSON.parse(require('fs').readFileSync('vercel.json','utf8')); JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('OK   vercel.json + package.json')"
+
       - name: Cú pháp Edge Functions
         if: hashFiles('supabase/functions/**/index.ts') != ''
         run: |
