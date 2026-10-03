@@ -7,11 +7,17 @@
 #
 # App thật nằm trong /eq-gym/ (URL: app.evolve.vn/eq-gym/, trang quản trị /eq-gym/admin/).
 # 2 file index.html ở gốc chỉ là trang chuyển hướng cho link cũ.
+# middleware.js + api/ + package.json = cổng bảo vệ nội dung Premium (Routing Middleware + hàm cấp thẻ), xem docs/SECURITY.md.
 # TRÊN VERCEL MỌI FILE TRONG THƯ MỤC XUẤT BẢN ĐỀU TẢI CÔNG KHAI ĐƯỢC → tuyệt đối không đặt mã nguồn
 # backend, khoá, tài liệu cài đặt nội bộ vào /eq-gym/ (đã dọn sang docs/legacy-apps-script/ ngày 04/10/2026).
 /*
 !/.gitignore
 !/vercel.json
+!/package.json
+!/package-lock.json
+!/middleware.js
+!/api/
+!/api/**
 !/index.html
 !/dangky/
 !/dangky/index.html

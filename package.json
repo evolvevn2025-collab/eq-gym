@@ -1,0 +1,11 @@
+{
+  "name": "eq-gym",
+  "private": true,
+  "version": "1.0.0",
+  "description": "App EQ GYM là file tĩnh. package.json chỉ để cấu hình Routing Middleware + hàm cấp thẻ nội dung Premium trên Vercel (không có bước build).",
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "dependencies": {
+    "@vercel/functions": "3.9.11"
+  }
+}
