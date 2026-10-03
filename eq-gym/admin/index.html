@@ -9,7 +9,7 @@
 <link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../vendor/supabase-js-2.117.2.js"></script>
 <style>
 html,body{margin:0;padding:0;background:#E9EDF2}
 body{font-family:'Nunito',-apple-system,BlinkMacSystemFont,sans-serif;color:#0F1923;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
@@ -26,6 +26,8 @@ table{width:100%;border-collapse:collapse}
 <body>
 <div id="app"></div>
 <script>
+/* Chống nhúng khung (clickjacking) — dự phòng cho trường hợp header CSP frame-ancestors không áp dụng được */
+if(window.top!==window.self){ try{ window.top.location=window.self.location; }catch(e){ document.documentElement.style.display='none'; } }
 const SUPA_URL="https://dpzlwlaekhfmorckukfm.supabase.co";
 const SUPA_ANON="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRwemx3bGFla2hmbW9yY2t1a2ZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk0NTk3NDMsImV4cCI6MjEwNTAzNTc0M30.BCSyd379ekTdrY3UKR9UCI72XGU6-xI02RldLSEYCIw";
 const sb=window.supabase.createClient(SUPA_URL,SUPA_ANON,{auth:{flowType:'pkce',detectSessionInUrl:true,persistSession:true,autoRefreshToken:true}});
@@ -290,7 +292,8 @@ async function exportAffCsv(){
     const by={}; data.forEach(c=>{ const k=c.referrer_id; by[k]=by[k]||{email:c.referrer_email,payout:c.referrer_payout||{},n:0,sum:0}; by[k].n++; by[k].sum+=c.commission||0; });
     const rows=[['Email','Ngân hàng','Số tài khoản','Chủ tài khoản','Số khoản','Tổng hoa hồng (đ)']];
     Object.values(by).forEach(r=>rows.push([r.email||'',r.payout.bank||'',r.payout.account||'',r.payout.name||'',r.n,r.sum]));
-    const csv='﻿'+rows.map(r=>r.map(x=>'"'+String(x).replace(/"/g,'""')+'"').join(',')).join('\n');
+    const cell=x=>{ if(typeof x==='number') return String(x); let s=String(x==null?'':x); if(/^[=+\-@\t\r]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; };   /* chống formula injection */
+    const csv='﻿'+rows.map(r=>r.map(cell).join(',')).join('\n');
     const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); a.download='eqgym-hoa-hong-'+new Date().toISOString().slice(0,10)+'.csv'; document.body.appendChild(a); a.click(); a.remove();
   }catch(e){ alert('Lỗi xuất file: '+e.message); }
 }
@@ -597,8 +600,10 @@ function viewTx(){
 function viewVouchers(){
   let h=header('Mã giảm giá','Tạo & quản lý voucher');
   h+=`<div style="padding:14px 16px 90px">`;
-  h+=card(`<div style="display:flex;gap:8px;flex-wrap:wrap">
-      <input id="vf_code" placeholder="MÃ (vd EQGYM199K)" style="flex:1;min-width:120px;background:#F5F8FA;border:1px solid #E3E8EE;border-radius:11px;padding:11px;font-size:13px;text-transform:uppercase">
+  const canEditV=!!(AUTH&&AUTH.role==='super_admin');
+  if(!canEditV) h+=`<p style="color:#5C6B7A;font-size:12.5px;font-weight:700;margin:0 2px 12px">🔒 Chỉ Super Admin được tạo / sửa / bật tắt mã giảm giá.</p>`;
+  else h+=card(`<div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="vf_code" placeholder="MÃ (vd GIAM50K)" style="flex:1;min-width:120px;background:#F5F8FA;border:1px solid #E3E8EE;border-radius:11px;padding:11px;font-size:13px;text-transform:uppercase">
       <input id="vf_discount" type="number" placeholder="Giảm (đ)" style="width:100px;background:#F5F8FA;border:1px solid #E3E8EE;border-radius:11px;padding:11px;font-size:13px">
       <input id="vf_max" type="number" placeholder="Lượt (trống=∞)" style="width:120px;background:#F5F8FA;border:1px solid #E3E8EE;border-radius:11px;padding:11px;font-size:13px">
     </div>
@@ -629,8 +634,8 @@ function viewVouchers(){
       h+=card(`<div style="display:flex;align-items:center;gap:10px">
         <div style="flex:1;min-width:0"><b style="font-family:'Space Grotesk';font-size:14px">${esc(v.code)}</b> ${pill(v.active?'Đang bật':'Đã tắt',v.active?'good':'off')}
         <div style="font-size:11.5px;color:#5C6B7A;font-weight:600;margin-top:3px">Giảm ${fmt(v.discount_amount)}đ · Đã dùng ${v.used_count}${v.max_uses!=null?'/'+v.max_uses:''}</div></div>
-        <button onclick="editVoucherStart('${v.id}')" style="border:1px solid #E3E8EE;border-radius:10px;padding:9px 12px;font-size:12px;font-weight:800;cursor:pointer;background:#fff;color:#5C6B7A;min-height:38px">Sửa</button>
-        <button onclick="toggleVoucher('${v.id}',${v.active})" style="border:1px solid #E3E8EE;border-radius:10px;padding:9px 12px;font-size:12px;font-weight:800;cursor:pointer;background:#fff;color:#5C6B7A;min-height:38px">${v.active?'Tắt':'Bật'}</button>
+        ${canEditV?`<button onclick="editVoucherStart('${v.id}')" style="border:1px solid #E3E8EE;border-radius:10px;padding:9px 12px;font-size:12px;font-weight:800;cursor:pointer;background:#fff;color:#5C6B7A;min-height:38px">Sửa</button>`:''}
+        ${canEditV?`<button onclick="toggleVoucher('${v.id}',${v.active})" style="border:1px solid #E3E8EE;border-radius:10px;padding:9px 12px;font-size:12px;font-weight:800;cursor:pointer;background:#fff;color:#5C6B7A;min-height:38px">${v.active?'Tắt':'Bật'}</button>`:''}
       </div>`,'padding:12px 14px');
     }
   });
@@ -640,7 +645,7 @@ function viewVouchers(){
 }
 /* Ảnh Google (lấy lúc đăng nhập); không có / lỗi tải thì hiện chữ cái đầu. no-referrer để ảnh googleusercontent không bị chặn */
 function avatar(u,size){ const email=(u&&u.email)||'', c=(((u&&u.full_name)||email).trim()[0])||'?'; const hues=['#0FB89B','#4A9EFF','#E0930A','#E85B5B','#8E6BD8','#0A8C77']; let n=0; for(const ch of email) n=(n+ch.charCodeAt(0))%hues.length;
-  const img=u&&u.avatar_url&&/^https:\/\//.test(u.avatar_url)?`<img src="${esc(u.avatar_url)}" alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.remove()" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%">`:'';
+  const img=u&&u.avatar_url&&/^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.googleusercontent\.com\//.test(u.avatar_url)?`<img src="${esc(u.avatar_url)}" alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.remove()" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%">`:'';
   return `<div style="position:relative;flex:0 0 ${size}px;width:${size}px;height:${size}px;border-radius:50%;background:${hues[n]};color:#fff;display:flex;align-items:center;justify-content:center;font-family:'Space Grotesk';font-weight:700;font-size:${Math.round(size*.42)}px;text-transform:uppercase;overflow:hidden">${esc(c)}${img}</div>`; }
 function viewUsers(){
   let h=header('Học viên',DATA.users?fmt(DATA.usersTotal)+' tài khoản khớp bộ lọc':'');
@@ -677,7 +682,7 @@ function userTimeline(x){
     else ev.push([t.created_at,t.status==='pending'?'🧾':'⏱',(t.status==='pending'?'Tạo đơn chờ thanh toán ':t.status==='rejected'?'Đơn bị từ chối ':'Đơn hết hạn / huỷ ')+fmt(t.amount)+'đ',(METHOD_LABEL[t.provider]||t.provider)+' · '+(t.code||'')+(t.note?' · '+t.note:'')]); });
   (x.practices||[]).forEach(r=>ev.push([r.created_at,'✍️','Luyện tập buổi '+r.lesson_n+' · '+r.score+' điểm',/gemini|ai|coach/i.test(r.by||'')?'Coach AI chấm':'Chấm tự động']));
   (x.assessments||[]).forEach(a=>ev.push([a.created_at,'🧭','Làm bài test EQ · '+(a.total!=null?a.total+'/100':'')+(a.band?' · '+a.band:''),'']));
-  const certs=(x.progress&&x.progress.certs)||{}; Object.keys(certs).forEach(k=>{ const c=certs[k]||{}; if(c.ts) ev.push([new Date(c.ts).toISOString(),'🎓','Nhận chứng nhận '+(c.title||k+' ngày'),k+' ngày luyện tập liên tục']); });
+  const certs=(x.progress&&x.progress.certs)||{}; Object.keys(certs).forEach(k=>{ const c=certs[k]||{}; const cd=new Date(Number(c.ts)); if(c.ts && !isNaN(cd.getTime())) ev.push([cd.toISOString(),'🎓','Nhận chứng nhận '+(c.title||k+' ngày'),k+' ngày luyện tập liên tục']); });
   (x.referred||[]).forEach(r=>ev.push([r.at,'📣','Giới thiệu '+(r.email||'—')+(r.premium?' · đã mua':''),'']));
   (x.commissions||[]).forEach(c=>ev.push([c.created_at,'💰','Hoa hồng '+fmt(c.commission)+'đ ('+Math.round(c.rate*100)+'%)',{pending:'Chờ duyệt',approved:'Chờ chuyển tiền',paid:'Đã trả',void:'Đã huỷ'}[c.status]||c.status]));
   return ev.filter(e=>e[0]).sort((a,b)=>new Date(b[0])-new Date(a[0]));
@@ -722,10 +727,10 @@ function viewUser(){
     <div style="height:8px;background:#EEF2F6;border-radius:6px;margin-top:6px;overflow:hidden"><i style="display:block;height:100%;width:${Math.round(done.length/30*100)}%;background:linear-gradient(90deg,#0FB89B,#0A8C77)"></i></div>
     <div style="display:grid;grid-template-columns:repeat(10,1fr);gap:3px;margin-top:10px">${Array.from({length:30},(_,i)=>`<div title="Buổi ${i}" style="aspect-ratio:1;border-radius:4px;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;background:${done.includes(i)?'#0FB89B':'#EEF2F6'};color:${done.includes(i)?'#fff':'#9AA6B2'}">${i}</div>`).join('')}</div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;text-align:center">
-      ${[['EP',fmt(g.bounty)],['Chuỗi hiện tại',(g.streak||0)+' ngày'],['Kỷ lục chuỗi',(st.bestStreak||g.streak||0)+' ngày'],['Ngày nghỉ phép',st.freezes!=null?st.freezes:'—'],['Bài luyện tập',x.practices_total],['Chứng nhận',Object.keys(g.certs||{}).length]].map(([k,v])=>`<div style="background:#F5F8FA;border-radius:12px;padding:8px 4px"><b style="display:block;font-family:'Space Grotesk';font-size:15px">${v}</b><span style="font-size:10px;color:#5C6B7A;font-weight:700">${k}</span></div>`).join('')}
+      ${[['EP',fmt(g.bounty)],['Chuỗi hiện tại',(g.streak||0)+' ngày'],['Kỷ lục chuỗi',((/^\d+$/.test(String(st.bestStreak))?st.bestStreak:null)||g.streak||0)+' ngày'],['Ngày nghỉ phép',/^\d+$/.test(String(st.freezes))?st.freezes:'—'],['Bài luyện tập',x.practices_total],['Chứng nhận',Object.keys(g.certs||{}).length]].map(([k,v])=>`<div style="background:#F5F8FA;border-radius:12px;padding:8px 4px"><b style="display:block;font-family:'Space Grotesk';font-size:15px">${esc(v)}</b><span style="font-size:10px;color:#5C6B7A;font-weight:700">${k}</span></div>`).join('')}
     </div>`);
   h+=userUsageCard();
-  const ev=userTimeline(x);
+  let ev=[]; try{ ev=userTimeline(x); }catch(e){ console.warn('timeline',e); }   /* dữ liệu lạ không được làm mất nút Khoá/Phạt */
   h+=secTitle('Lịch sử hoạt động',`<span style="font-size:11px;color:#8A97A5;font-weight:700">${ev.length} sự kiện</span>`);
   h+=card(ev.length?`<div style="position:relative;padding-left:4px">${ev.slice(0,UI.histMore).map(e=>`<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #F0F3F6">
       <div style="flex:0 0 26px;height:26px;border-radius:50%;background:#F5F8FA;display:flex;align-items:center;justify-content:center;font-size:13px">${e[1]}</div>

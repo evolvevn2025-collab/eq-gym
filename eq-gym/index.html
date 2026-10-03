@@ -16,7 +16,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Nunito:wght@400;600;700;800&family=Dancing+Script:wght@700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="vendor/supabase-js-2.117.2.js"></script>
 <style>
 html,body{margin:0;padding:0;background:#E9EDF2}
 body{font-family:'Nunito',-apple-system,BlinkMacSystemFont,sans-serif;color:#0F1923;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
@@ -43,13 +43,16 @@ button{font-family:inherit}
 <body>
 <div id="app"></div>
 <script>
+/* Chống nhúng khung (clickjacking) — dự phòng cho trường hợp header CSP frame-ancestors không áp dụng được */
+if(window.top!==window.self){ try{ window.top.location=window.self.location; }catch(e){ document.documentElement.style.display='none'; } }
 /* ================================================================
    ☁️ CẤU HÌNH BACKEND (SUPABASE) — dán 2 giá trị để bật tài khoản/Premium
    Trống = chế độ local (chạy như thường, mở khóa tất cả). Xem docs/SETUP-SUPABASE.md
    ================================================================ */
 const SUPA_URL="https://dpzlwlaekhfmorckukfm.supabase.co";
 const SUPA_ANON="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRwemx3bGFla2hmbW9yY2t1a2ZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk0NTk3NDMsImV4cCI6MjEwNTAzNTc0M30.BCSyd379ekTdrY3UKR9UCI72XGU6-xI02RldLSEYCIw";
-const BACKEND=!!(SUPA_URL && SUPA_ANON && window.supabase);
+const BACKEND_CONFIGURED=!!(SUPA_URL && SUPA_ANON);   // đã cấu hình backend (luôn true trên bản thật)
+const BACKEND=BACKEND_CONFIGURED && !!window.supabase; // true khi thư viện đăng nhập đã tải xong
 let sb=BACKEND ? window.supabase.createClient(SUPA_URL,SUPA_ANON,{auth:{flowType:'pkce',detectSessionInUrl:true,persistSession:true,autoRefreshToken:true}}) : null;
 let AUTH=null;
 /* Dọn ?code=/#access_token=... khỏi URL sau khi Supabase đã xử lý xong đăng nhập —
@@ -64,36 +67,6 @@ function cleanAuthParams(){
   }catch(e){}
 }
 
-/* ================================================================
-   🔐 APP BACKEND (Apps Script) — mã đăng nhập + Gemini ẩn + điểm + thi đua
-   Dán URL web app (app-backend.gs) vào APP_BACKEND. Trống = chế độ mở (local).
-   Xem SETUP-APP-BACKEND.md
-   ================================================================ */
-const APP_BACKEND=""; // Đã chuyển sang Supabase (SUPA_URL/SUPA_ANON ở trên) — không dùng GAS/mã học viên nữa
-const CODE_MODE=!!APP_BACKEND;
-/* 🌐 CHẾ ĐỘ MỞ THỬ (public): true = ai cũng vào được, KHÔNG cần mã đăng nhập.
-   Dùng chung 1 mã khách (GUEST_CODE) để Coach AI vẫn chạy. Đổi false để bật lại đăng nhập bằng mã. */
-const OPEN_MODE=true;
-const GUEST_CODE="EQ4VEEB";
-let MEMBER=null; // {code,name,points,role}
-function memberCode(){ try{ return localStorage.getItem('eqgym_code')||''; }catch(e){ return ''; } }
-/* Gọi backend Apps Script — tự thử lại tối đa 3 lần (có giãn cách) và có timeout mỗi lần gọi.
-   Lý do: test tải thực tế cho thấy Apps Script/Drive thỉnh thoảng trả lỗi tạm thời (kể cả với
-   chỉ vài request cùng lúc) hoặc treo không phản hồi — không retry/timeout thì UI bị đứng im. */
-async function api(payload,tries){
-  tries=tries||3; let lastErr;
-  for(let i=0;i<tries;i++){
-    let to;
-    try{
-      const ctrl=new AbortController(); to=setTimeout(()=>ctrl.abort(),12000);
-      const r=await fetch(APP_BACKEND,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),signal:ctrl.signal});
-      clearTimeout(to);
-      const text=await r.text();
-      try{ return JSON.parse(text); }catch(e){ throw new Error('bad-response'); }
-    }catch(e){ clearTimeout(to); lastErr=e; if(i<tries-1) await new Promise(res=>setTimeout(res,500*(i+1))); }
-  }
-  throw lastErr;
-}
 /* 🤖 CÔNG TẮC AI — false = tắt toàn bộ tính năng AI (Coach chat, AI tạo tình huống, AI chấm bài).
    Tạm tắt từ 25/09/2026 chờ rà soát an toàn thông tin & pháp lý (docs/PRIVACY-COMPLIANCE-CHECKLIST.md).
    Server cũng khoá riêng qua settings.ai_enabled — bật lại phải bật CẢ HAI. */
@@ -107,115 +80,14 @@ async function geminiFetch(body){
   if(!data || data.error) throw new Error((data&&data.error)||'AI proxy lỗi');
   return data;
 }
-let _psT=null;
-function memberSession(){ try{ return localStorage.getItem('eqgym_session')||''; }catch(e){ return ''; } }
-function handleKick(d){ if(OPEN_MODE) return false; if(d&&d.ok===false&&(d.error==='session'||d.error==='blocked')){ kickedLogout(d.error); return true; } return false; }
-function kickedLogout(reason){ MEMBER=null; try{ localStorage.removeItem('eqgym_code'); localStorage.removeItem('eqgym_session'); }catch(e){} stopHeartbeat(); stopRankRefresh(); UI.settingsOpen=false; UI.view='home'; UI.loginErr=(reason==='blocked')?'Tài khoản của bạn đã bị tạm khoá. Liên hệ admin để mở lại.':'Bạn vừa đăng nhập ở thiết bị khác. Mỗi tài khoản chỉ dùng 1 thiết bị cùng lúc — để bạn tập trung & chánh niệm khi học.'; render(); }
-let _saT=null;
-function trimForSync(){
-  const cap=(s,n)=>{ s=(s==null?'':String(s)); return s.length>n?s.slice(0,n):s; };
-  const hist={}; Object.keys(S.history||{}).forEach(k=>{ hist[k]=(S.history[k]||[]).slice(0,8).map(x=>({ts:x.ts,score:x.score,dims:x.dims,by:x.by})); });
-  const ans={}; Object.keys(S.ans||{}).forEach(k=>{ if(S.ans[k]) ans[k]=cap(S.ans[k],500); });
-  const scores={}; Object.keys(S.scores||{}).forEach(k=>{ const x=S.scores[k]||{}; scores[k]={score:x.score,dims:x.dims,by:x.by,feedback:cap(x.feedback,220),tip:cap(x.tip,160)}; });
-  let out={done:S.done,graded:S.graded,streak:S.streak,last:S.last,bounty:S.bounty,practices:S.practices,quiz:S.quiz,qans:S.qans,scen:S.scen,scores:scores,ans:ans,history:hist,certs:S.certs||{},freezes:S.freezes,bestStreak:S.bestStreak,broken:S.broken||null,streak7:S.streak7,freezeBuys:(S.freezeBuys||[]).slice(-10)};
-  try{ if(JSON.stringify(out).length>45000){ out.ans={}; } if(JSON.stringify(out).length>45000){ out.history={}; } }catch(e){}
-  return out;
-}
-function syncAll(){ if(!CODE_MODE||!MEMBER||(MEMBER.role!=='member'&&MEMBER.role!=='guest')) return; clearTimeout(_saT); _saT=setTimeout(async()=>{ try{ const d=await api({action:'saveProgress',code:MEMBER.code,session:MEMBER.session,data:trimForSync()}); handleKick(d); }catch(e){} },2500); }
-function syncPoints(){ syncAll(); }
-let _hb=null;
-function startHeartbeat(){ stopHeartbeat(); if(OPEN_MODE||!CODE_MODE||!MEMBER||MEMBER.role!=='member') return; _hb=setInterval(async()=>{ try{ const d=await api({action:'ping',code:MEMBER.code,session:MEMBER.session}); handleKick(d); }catch(e){} },20000); }
-function stopHeartbeat(){ if(_hb){ clearInterval(_hb); _hb=null; } }
 let _rankT=null;
 function startRankRefresh(){ stopRankRefresh(); _rankT=setInterval(()=>{ if(UI.view==='rank') loadRank(); else stopRankRefresh(); },15000); }
 function stopRankRefresh(){ if(_rankT){ clearInterval(_rankT); _rankT=null; } }
-function applyProgress(p){ try{ p=p||{}; const L=S, m=Object.assign(dflt(),p);
-  m.done=[...new Set([...(p.done||[]),...(L.done||[])])];
-  m.bounty=Math.max(p.bounty||0,L.bounty||0); m.streak=Math.max(p.streak||0,L.streak||0); m.practices=Math.max(p.practices||0,L.practices||0); m.last=p.last||L.last;
-  m.bestStreak=Math.max(p.bestStreak||0,L.bestStreak||0,m.streak); m.freezes=Math.max(p.freezes||0,L.freezes||0); m.streak7=!!(p.streak7||L.streak7);
-  m.broken=(L.broken&&(!p.broken||L.broken.at>=p.broken.at))?L.broken:(p.broken||null);
-  m.freezeBuys=[...new Set([...(p.freezeBuys||[]),...(L.freezeBuys||[])])].slice(-10);
-  ['ans','scores','graded','scen','qans'].forEach(k=>{ m[k]=Object.assign({},p[k]||{},L[k]||{}); });
-  m.history=Object.assign({},p.history||{},L.history||{}); m.chat=(L.chat&&L.chat.length)?L.chat:(p.chat||[]); m.quiz=p.quiz||L.quiz; m.certs=Object.assign({},p.certs||{},L.certs||{});
-  S=m; try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){ _mem=S; }
-}catch(e){} }
-async function doLogin(){
-  const code=(val('logincode')||'').trim().toUpperCase(); if(!code){ UI.loginErr='Nhập mã đăng nhập'; render(); return; }
-  UI.loginBusy=true; UI.loginErr=''; render();
-  try{ const d=await api({action:'login',code});
-    if(!d||!d.ok){ UI.loginBusy=false; UI.loginErr=(d&&d.error)||'Mã không đúng'; render(); return; }
-    MEMBER={code,name:d.name,points:d.points||0,role:d.role,session:d.session||''};
-    try{ localStorage.setItem('eqgym_code',code); localStorage.setItem('eqgym_session',MEMBER.session); }catch(e){}
-    if(d.role==='member'){ if(d.progress){ applyProgress(d.progress); } else { S.bounty=d.points||0; save(); } startHeartbeat(); }
-    UI.loginBusy=false; UI.loginErr=''; UI.adminLogin=false; sfx('success');
-    if(d.role==='admin'){ openAdminCode(); } else { UI.view='home'; render(); }
-  }catch(e){ UI.loginBusy=false; UI.loginErr='Lỗi kết nối, thử lại'; render(); }
-}
-function logoutMember(){ MEMBER=null; try{ localStorage.removeItem('eqgym_code'); localStorage.removeItem('eqgym_session'); }catch(e){} stopHeartbeat(); stopRankRefresh(); UI.settingsOpen=false; UI.adminLogin=false; UI.view='home'; render(); }
-function guestStored(){ try{ return JSON.parse(localStorage.getItem('eqgym_guest')||'null'); }catch(e){ return null; } }
-function guestLogout(){ MEMBER=null; try{ localStorage.removeItem('eqgym_guest'); }catch(e){} stopRankRefresh(); UI.settingsOpen=false; UI.view='home'; render(); }
-async function doGuestJoin(){
-  const name=(val('gname')||'').trim(); const email=(val('gemail')||'').trim().toLowerCase();
-  if(!email||email.indexOf('@')<1){ UI.loginErr='Nhập email hợp lệ để bắt đầu'; render(); return; }
-  UI.loginBusy=true; UI.loginErr=''; render();
-  try{ const d=await api({action:'guest',name,email});
-    if(!d||!d.ok){ UI.loginBusy=false; UI.loginErr=(d&&d.error)||'Lỗi, thử lại'; render(); return; }
-    MEMBER={code:d.code,name:d.name,role:'guest',session:d.session||'',email};
-    try{ localStorage.setItem('eqgym_guest',JSON.stringify({code:d.code,session:d.session,name:d.name,email})); }catch(e){}
-    if(d.progress) applyProgress(d.progress);
-    UI.loginBusy=false; UI.loginErr=''; UI.view='home'; sfx('success'); render();
-  }catch(e){ UI.loginBusy=false; UI.loginErr='Lỗi kết nối, thử lại'; render(); }
-}
-function emailGate(){
-  const g=guestStored()||{};
-  return `<div style="min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding:32px 24px;background:linear-gradient(160deg,#0F1923,#0A6E5D 135%)">
-    <div style="text-align:center;color:#fff">
-      <div style="width:76px;height:76px;margin:0 auto;border-radius:22px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center">${LOGOW}</div>
-      <h1 style="font-family:'Space Grotesk';font-size:26px;font-weight:700;margin:18px 0 2px">EQ <span style="color:#0FB89B">GYM</span></h1>
-      <p style="color:#B9C6D4;font-size:13px;font-weight:600;margin:0">Phòng tập cảm xúc · Bản dùng thử</p>
-    </div>
-    <div style="background:#fff;border-radius:22px;padding:22px 18px;margin-top:26px;box-shadow:0 18px 44px rgba(0,0,0,.3)">
-      <h2 style="font-family:'Space Grotesk';font-size:17px;font-weight:700;margin:0 0 4px">Bắt đầu học thử ngay 🌱</h2>
-      <p style="color:#5C6B7A;font-size:12.5px;font-weight:600;line-height:1.6;margin:0 0 14px">Nhập tên & email để lưu tiến độ và mở khoá Coach AI. Miễn phí, không cần mật khẩu.</p>
-      <input id="gname" type="text" placeholder="Tên của bạn" value="${esc(g.name||'')}" autocomplete="name" style="width:100%;background:#F5F8FA;border:1px solid #E3E8EE;border-radius:13px;padding:14px;font-size:15px;font-weight:600">
-      <input id="gemail" type="email" inputmode="email" placeholder="Email" value="${esc(g.email||'')}" autocomplete="email" onkeydown="if(event.key==='Enter')doGuestJoin()" style="width:100%;margin-top:10px;background:#F5F8FA;border:1px solid #E3E8EE;border-radius:13px;padding:14px;font-size:15px;font-weight:600">
-      ${UI.loginErr?`<p style="color:#E85B5B;font-size:12.5px;font-weight:700;margin:10px 0 0;text-align:center">${esc(UI.loginErr)}</p>`:''}
-      <button onclick="doGuestJoin()" ${UI.loginBusy?'disabled':''} style="width:100%;margin-top:14px;border:none;border-radius:14px;padding:16px;font-size:15px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#0A8570,#07705E);color:#fff;min-height:52px;opacity:${UI.loginBusy?.6:1}">${UI.loginBusy?'Đang vào...':'Vào phòng tập →'}</button>
-      <p style="color:#8A97A5;font-size:12px;font-weight:600;margin:12px 0 0;text-align:center">🔒 Chỉ dùng để lưu tiến độ của bạn trong đợt dùng thử.</p>
-    </div>
-    <p style="text-align:center;margin:16px 0 0"><a onclick="UI.adminLogin=true;UI.loginErr='';render()" style="color:#7FA39B;font-size:12px;font-weight:700;cursor:pointer">Quản trị viên? Đăng nhập tại đây →</a></p>
-  </div>`;
-}
 function openRank(){ sfx('tap'); if(BACKEND&&!isPremium()){ UI.premOpen=true; render(); return; } UI.view='rank'; UI.rankData=null; render(); loadRank(); startRankRefresh(); window.scrollTo(0,0); }
 async function loadRank(){ if(!BACKEND) return; try{ const {data,error}=await sb.rpc('leaderboard',{limit_n:50}); if(error) throw error;
   const top=(data||[]).map(r=>({rank:r.rank,name:r.display_name,points:r.points,user_id:r.user_id}));
   const mine=AUTH?top.find(r=>r.user_id===AUTH.id)||null:null;
   UI.rankData={top,me:mine,total:top.length}; render(); }catch(e){ console.warn('rank',e); } }
-function openAdminCode(){ sfx('tap'); UI.settingsOpen=false; UI.view='admincode'; UI.newCode=null; UI.members=undefined; UI.adminTab='members'; render(); loadMembers(); window.scrollTo(0,0); }
-function adminTabTo(t){ UI.adminTab=t; render(); if(t==='activity') loadActivity(); else loadMembers(); }
-async function loadActivity(){ try{ const d=await api({action:'activity',admin:MEMBER.code}); if(d&&d.ok){ UI.activity=d.items; render(); } }catch(e){} }
-async function adminSetStatus(code,status){ try{ const d=await api({action:'setStatus',admin:MEMBER.code,code,status}); if(d&&d.ok){ toast(status==='blocked'?'Đã khoá':'Đã mở khoá'); loadMembers(); } else toast((d&&d.error)||'Lỗi'); }catch(e){ toast('Lỗi'); } }
-async function adminDelete(code,name){ if(!confirm('Xoá tài khoản "'+name+'" ('+code+')? Không thể hoàn tác.')) return; try{ const d=await api({action:'deleteMember',admin:MEMBER.code,code}); if(d&&d.ok){ toast('Đã xoá '+code); loadMembers(); } else toast((d&&d.error)||'Lỗi'); }catch(e){ toast('Lỗi'); } }
-function evLabel(e){ return ({login:'🔓 Đăng nhập',register:'📝 Đăng ký',['code-issued']:'🔑 Cấp mã',blocked:'⛔ Khoá',unblocked:'✅ Mở khoá',deleted:'🗑️ Xoá',['reset-points']:'♻️ Reset điểm',['done-lesson']:'✅ Xong buổi',['open-workbook']:'📘 Mở workbook',certificate:'🎓 Chứng nhận'})[e]||e; }
-async function adminCreate(){ const name=(val('newname')||'').trim(); if(!name){ toast('Nhập tên khách'); return; } UI.adminBusy=true; render(); try{ const d=await api({action:'createCode',admin:MEMBER.code,name}); if(d&&d.ok){ UI.newCode=d; UI.adminBusy=false; loadMembers(); render(); toast('Đã tạo mã cho '+d.name); } else { UI.adminBusy=false; toast((d&&d.error)||'Lỗi'); render(); } }catch(e){ UI.adminBusy=false; toast('Lỗi kết nối'); render(); } }
-async function loadMembers(){ try{ const d=await api({action:'listMembers',admin:MEMBER.code}); if(d&&d.ok){ UI.members=d.members; render(); } }catch(e){} }
-function copyCode(c){ try{ navigator.clipboard.writeText(c); toast('Đã copy mã '+c); }catch(e){} }
-function viewLogin(){
-  return `<div style="min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding:32px 24px;background:linear-gradient(160deg,#0F1923,#0A6E5D 135%)">
-    <div style="text-align:center;color:#fff">
-      <div style="width:76px;height:76px;margin:0 auto;border-radius:22px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center">${LOGOW}</div>
-      <h1 style="font-family:'Space Grotesk';font-size:26px;font-weight:700;margin:18px 0 2px">EQ <span style="color:#0FB89B">GYM</span></h1>
-      <p style="color:#B9C6D4;font-size:13px;font-weight:600;margin:0">Phòng tập cảm xúc · 30 ngày</p>
-    </div>
-    <div style="background:#fff;border-radius:22px;padding:22px 18px;margin-top:26px;box-shadow:0 18px 44px rgba(0,0,0,.3)">
-      <h2 style="font-family:'Space Grotesk';font-size:17px;font-weight:700;margin:0 0 4px">Nhập mã đăng nhập</h2>
-      <p style="color:#5C6B7A;font-size:12.5px;font-weight:600;line-height:1.6;margin:0 0 14px">Mã do quản trị viên EQ GYM cấp sau khi xác nhận thanh toán. Chưa có mã? Liên hệ admin để được cấp.</p>
-      <input id="logincode" type="text" autocapitalize="characters" placeholder="VD: EQ7K9M2" value="${esc(memberCode())}" onkeydown="if(event.key==='Enter')doLogin()" style="width:100%;background:#F5F8FA;border:1px solid #E3E8EE;border-radius:13px;padding:15px;font-size:17px;font-weight:800;letter-spacing:2px;text-align:center;text-transform:uppercase">
-      ${UI.loginErr?`<p style="color:#E85B5B;font-size:12.5px;font-weight:700;margin:10px 0 0;text-align:center">${esc(UI.loginErr)}</p>`:''}
-      <button onclick="doLogin()" ${UI.loginBusy?'disabled':''} style="width:100%;margin-top:14px;border:none;border-radius:14px;padding:16px;font-size:15px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#0A8570,#07705E);color:#fff;min-height:52px;opacity:${UI.loginBusy?.6:1}">${UI.loginBusy?'Đang kiểm tra...':'Vào phòng tập →'}</button>
-    </div>
-  </div>`;
-}
 function viewRank(){
   const d=UI.rankData; let rows='';
   if(d&&d.top){ if(!d.top.length) rows=`<p style="text-align:center;color:#5C6B7A;font-weight:600;padding:30px 0">Chưa có dữ liệu thi đua.</p>`;
@@ -232,56 +104,11 @@ function viewRank(){
     <div style="padding:6px 16px 24px"><button onclick="loadRank()" style="width:100%;border:1px solid #E3E8EE;border-radius:13px;padding:12px;font-size:13px;font-weight:800;background:#fff;cursor:pointer;color:#0F1923">↻ Làm mới</button></div>
   </div>`;
 }
-function viewAdminCode(){
-  const nc=UI.newCode; const tab=UI.adminTab||'members';
-  const tabBtn=(t,label)=>`<button onclick="adminTabTo('${t}')" style="flex:1;border:none;border-radius:11px;padding:10px;font-size:12.5px;font-weight:800;cursor:pointer;background:${tab===t?'#0F1923':'transparent'};color:${tab===t?'#fff':'#5C6B7A'}">${label}</button>`;
-  let body='';
-  if(tab==='members'){
-    let list='';
-    (UI.members||[]).forEach(m=>{ const bl=m.status==='blocked';
-      list+=`<div style="background:#fff;border:1px solid ${bl?'#F3C9C9':'#E3E8EE'};border-radius:13px;padding:11px 13px;margin-bottom:8px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="flex:1;min-width:0"><b style="font-size:13.5px">${esc(m.name)}</b>${m.role==='guest'?' <span style="font-size:11px;color:#4A9EFF;font-weight:800;background:#EAF3FE;border:1px solid #CCE1F8;border-radius:6px;padding:1px 5px">KHÁCH</span>':''}${bl?' <span style="font-size:12px;color:#E85B5B;font-weight:800">● KHOÁ</span>':''}<div style="font-size:12px;color:#5C6B7A;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.email||m.phone||'')}</div><div style="font-family:'Space Grotesk';font-size:12px;color:#0A6E5D;font-weight:700">${esc(m.code)} · ${m.done||0} bài${m.last?' · '+esc(String(m.last)):''}</div></div>
-          <div style="font-family:'Space Grotesk';font-weight:700;color:#5C6B7A;font-size:13px;white-space:nowrap">${fmtEP(m.points)} EP</div>
-        </div>
-        <div style="display:flex;gap:6px;margin-top:9px">
-          <button onclick="copyCode('${esc(m.code)}')" style="flex:1;border:1px solid #E3E8EE;background:#F5F8FA;border-radius:9px;padding:8px;font-size:12px;font-weight:800;cursor:pointer;color:#0A6E5D">Copy mã</button>
-          <button onclick="adminSetStatus('${esc(m.code)}','${bl?'active':'blocked'}')" style="flex:1;border:1px solid ${bl?'#B6EDDF':'#F3C9C9'};background:${bl?'#EAFBF6':'#FDECEC'};border-radius:9px;padding:8px;font-size:12px;font-weight:800;cursor:pointer;color:${bl?'#0A6E5D':'#C74848'}">${bl?'Mở khoá':'Khoá'}</button>
-          <button onclick="adminDelete('${esc(m.code)}','${esc((m.name||'').replace(/'/g,''))}')" style="flex:0 0 44px;border:1px solid #E3E8EE;background:#fff;border-radius:9px;padding:8px;font-size:13px;cursor:pointer;color:#C74848">🗑️</button>
-        </div></div>`; });
-    body=`<div style="padding:14px 16px 0"><div style="font-size:12px;color:#5C6B7A;font-weight:800;margin-bottom:10px">Tổng ${(UI.members||[]).length} tài khoản</div>${list||'<p style="color:#5C6B7A;font-size:12.5px;font-weight:600">Chưa có thành viên nào.</p>'}</div>`;
-  } else {
-    let rows='';
-    (UI.activity||[]).forEach(a=>{ rows+=`<div style="display:flex;gap:10px;padding:10px 12px;background:#fff;border:1px solid #E3E8EE;border-radius:11px;margin-bottom:6px"><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800">${evLabel(a.event)} <span style="color:#5C6B7A;font-weight:700">${esc(a.name||'')}</span></div>${a.detail?`<div style="font-size:12px;color:#5C6B7A;font-weight:600;margin-top:1px">${esc(a.detail)}</div>`:''}</div><div style="font-size:12px;color:#8A97A5;font-weight:700;white-space:nowrap">${esc(a.time||'')}</div></div>`; });
-    body=`<div style="padding:14px 16px 0">${UI.activity?(rows||'<p style="color:#5C6B7A;font-size:12.5px;font-weight:600">Chưa có hoạt động.</p>'):'<p style="color:#5C6B7A;font-size:12.5px;font-weight:600;text-align:center;padding:20px 0">Đang tải nhật ký...</p>'}</div>`;
-  }
-  return `<div style="animation:fade .25s">
-    <div style="padding:calc(env(safe-area-inset-top) + 20px) 18px 6px;display:flex;align-items:center;gap:10px"><button onclick="nav('home')" style="border:1px solid #E3E8EE;background:#fff;border-radius:11px;width:40px;height:40px;font-size:17px;cursor:pointer">‹</button><div><h1 style="margin:0;font-family:'Space Grotesk';font-size:20px;font-weight:700">🛡️ Quản trị</h1><p style="margin:1px 0 0;color:#5C6B7A;font-size:12px;font-weight:700">Tài khoản học viên & nhật ký hệ thống</p></div></div>
-    <div style="margin:12px 16px 0;background:#fff;border:1px solid #E3E8EE;border-radius:18px;padding:16px">
-      <div style="font-size:12px;color:#5C6B7A;font-weight:800;margin-bottom:8px">Cấp mã thủ công</div>
-      <div style="display:flex;gap:8px"><input id="newname" placeholder="Tên khách hàng" onkeydown="if(event.key==='Enter')adminCreate()" style="flex:1;min-width:0;background:#F5F8FA;border:1px solid #E3E8EE;border-radius:12px;padding:12px;font-size:14px;font-weight:600">
-      <button onclick="adminCreate()" ${UI.adminBusy?'disabled':''} style="flex:0 0 96px;border:none;border-radius:12px;padding:12px;font-size:13px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#0A8570,#07705E);color:#fff;opacity:${UI.adminBusy?.6:1}">${UI.adminBusy?'...':'+ Tạo mã'}</button></div>
-      ${nc?`<div style="margin-top:12px;background:#EAFBF6;border:1px solid #B6EDDF;border-radius:13px;padding:14px;text-align:center"><div style="font-size:12px;color:#0A6E5D;font-weight:800">MÃ CHO ${esc((nc.name||'').toUpperCase())}</div><div style="font-family:'Space Grotesk';font-size:26px;font-weight:700;letter-spacing:3px;margin:4px 0">${esc(nc.code)}</div><button onclick="copyCode('${esc(nc.code)}')" style="border:1px solid #B6EDDF;background:#fff;border-radius:10px;padding:8px 16px;font-size:12px;font-weight:800;cursor:pointer;color:#0A6E5D">Copy mã gửi khách</button></div>`:''}
-    </div>
-    <div style="margin:14px 16px 0;background:#EEF2F6;border-radius:13px;padding:4px;display:flex;gap:4px">${tabBtn('members','👥 Tài khoản')}${tabBtn('activity','📜 Nhật ký')}</div>
-    ${body}
-    <div style="height:34px"></div>
-  </div>`;
-}
 
 /* ===== Thanh toán / cộng đồng (Premium) ===== */
 const COMMUNITY_URL="https://zalo.me/g/9cisw0ktwt4zowguavqb";
 const PREMIUM_PRICE=499000;
 
-/* ================================================================
-   🎬 ĐỒNG BỘ VIDEO TỪ GOOGLE DRIVE (tuỳ chọn) — xem docs/SETUP-DRIVE-VIDEO.md
-   Dán API key Google (Drive API, khoá theo domain) + ID các thư mục chứa video.
-   Video đặt tên có SỐ BUỔI (vd "0.mp4","17.mp4","buoi 3.mp4"); folder để "Anyone with link".
-   App tự đọc folder, khớp tên → số buổi, phát bằng player Drive. Thả video mới là tự cập nhật.
-   ================================================================ */
-const GDRIVE_API_KEY="";
-const GDRIVE_FOLDERS=[]; // vd: ["1PAShczXIvE24i3w6PBCTwpCK0SiuY7_p","<folder_khac>"]
-let GD_VIDEOS={}; try{ GD_VIDEOS=JSON.parse(localStorage.getItem('eqgym_gdvideos'))||{}; }catch(e){}
 
 const VIDEO_MAP = {
   0:{yt:"https://youtu.be/NOW6MBZnyaA",mp4:"videos/bai0.mp4"}, // Bài 0: CHÀO MỪNG BẠN ĐÃ BƯỚC VÀO HÀNH TRÌNH NÂNG CAO CƠ BẮP CẢM XÚC
@@ -344,7 +171,6 @@ const TRACKS=[
 const QUICK=['Hôm nay mình nên tập bài nào?','Cho mình 1 tình huống để luyện EQ','Mình đang căng thẳng, giúp mình với','Làm sao giữ thói quen luyện mỗi ngày?'];
 const STEP_LINES=8, AUTO_NEXT=true;
 const LOGO=`<svg width="42" height="42" viewBox="0 0 100 100"><rect x="10" y="18" width="9" height="64" rx="4.5" fill="#0F1923"/><rect x="10" y="18" width="32" height="9" rx="4.5" fill="#0F1923"/><rect x="10" y="45" width="26" height="9" rx="4.5" fill="#0F1923"/><rect x="10" y="73" width="32" height="9" rx="4.5" fill="#0F1923"/><circle cx="70" cy="50" r="22" fill="none" stroke="#0FB89B" stroke-width="9"/><circle cx="70" cy="50" r="5" fill="#E85B5B"/><rect x="78" y="64" width="19" height="7" rx="3.5" transform="rotate(45 78 64)" fill="#0FB89B"/></svg>`;
-const LOGOW=`<svg width="36" height="36" viewBox="0 0 100 100"><rect x="10" y="18" width="9" height="64" rx="4.5" fill="#fff"/><rect x="10" y="18" width="32" height="9" rx="4.5" fill="#fff"/><rect x="10" y="45" width="26" height="9" rx="4.5" fill="#fff"/><rect x="10" y="73" width="32" height="9" rx="4.5" fill="#fff"/><circle cx="70" cy="50" r="22" fill="none" stroke="#0FB89B" stroke-width="9"/><circle cx="70" cy="50" r="5" fill="#E85B5B"/><rect x="78" y="64" width="19" height="7" rx="3.5" transform="rotate(45 78 64)" fill="#0FB89B"/></svg>`;
 function ring(size,color,dot){ dot=dot||'#E85B5B'; return `<svg width="${size}" height="${size}" viewBox="0 0 100 100"><circle cx="50" cy="50" r="32" fill="none" stroke="${color}" stroke-width="13"/><circle cx="50" cy="50" r="8" fill="${dot}"/></svg>`; }
 
 /* ===== KHUNG 4 TRỤ CỘT EQ ===== */
@@ -377,7 +203,7 @@ function dflt(){ return {done:[],ans:{},scores:{},graded:{},streak:0,last:null,b
 let S=load();
 let UI={view:'home',n:null,step:0,settingsOpen:false,musicOpen:false,premOpen:false,payOpen:false,treasure:null,toastMsg:'',grading:false,scenLoading:false,mp4Ok:null,openZones:null,chatTyping:false,chatInput:'',keyInput:'',certOpen:null,certImg:null,zv:null,streakOpen:false,pay:null,aff:null,affOpen:false};
 let snd; try{ snd=Object.assign({bgm:true,sfx:true,track:0,vol:0.5,autoPause:true}, JSON.parse(localStorage.getItem('eqgym_sound_v1'))||{}); }catch(e){ snd={bgm:true,sfx:true,track:0,vol:0.5,autoPause:true}; }
-function save(){ S.mt=Date.now(); try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){ _mem=S; } scheduleSync(); syncPoints(); }
+function save(){ S.mt=Date.now(); try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){ _mem=S; } scheduleSync(); }
 function saveSnd(){ try{ localStorage.setItem('eqgym_sound_v1',JSON.stringify(snd)); }catch(e){} }
 
 /* ===== ĐỒNG BỘ SUPABASE (no-op ở local) ===== */
@@ -418,7 +244,7 @@ function fmt(x){ return (x||0).toLocaleString('vi-VN'); }
 /* Hiển thị EP gọn (chỉ lớp giao diện, dữ liệu giữ nguyên): 240.000.000 → "240 tr"; long=true → "240 triệu" */
 function fmtEP(x,long){ x=x||0; if(Math.abs(x)>=1e6){ const v=Math.round(x/1e5)/10; return (v%1===0?String(v):String(v).replace('.',','))+(long?' triệu':' tr'); } return fmt(x); }
 function isDone(n){ return S.done.includes(n); }
-function isPremium(){ return !!(!BACKEND || (AUTH && (AUTH.role==='admin'||AUTH.role==='super_admin' || (AUTH.premium_until && new Date(AUTH.premium_until)>new Date())))); }
+function isPremium(){ return !!(!BACKEND_CONFIGURED || (AUTH && (AUTH.role==='admin'||AUTH.role==='super_admin' || (AUTH.premium_until && new Date(AUTH.premium_until)>new Date())))); }
 function isLifetime(d){ return !!d && new Date(d).getFullYear()>=2900; }
 function premiumUntilText(d){ return isLifetime(d)?'Premium trọn đời':'Premium đến '+new Date(d).toLocaleDateString('vi-VN'); }
 function isAdmin(){ return AUTH && (AUTH.role==='admin'||AUTH.role==='super_admin'); }
@@ -495,35 +321,13 @@ window.addEventListener('popstate',()=>{
 function goStep(d){ sfx('pop'); UI.step=Math.max(0,Math.min(STEPS.length-1,UI.step+d)); render(); window.scrollTo(0,0); }
 function stepIdx(kind){ return STEPS.findIndex(s=>s.kind===kind); }
 function jumpStep(idx){ if(idx<0||idx>=STEPS.length) return; sfx('tap'); UI.step=idx; render(); window.scrollTo(0,0); }
-function scrollToVid(){ sfx('tap'); const e=document.getElementById('introvid'); if(e) e.scrollIntoView({behavior:'smooth',block:'center'}); }
 
 /* ===== ĐỒNG BỘ VIDEO GOOGLE DRIVE ===== */
-function gdLessonNum(name){
-  const base=(name||'').replace(/\.[a-z0-9]+$/i,'');
-  let m=base.match(/(?:bu[oổ]i|b[aà]i)\s*[-_. ]?\s*(\d{1,2})/i); if(m) return +m[1];
-  if(/^\s*\d{1,2}\s*$/.test(base)) return +base.trim();
-  m=base.match(/\b(\d{1,2})\b/); if(m){ const v=+m[1]; if(v>=0&&v<=29) return v; }
-  return null;
-}
-async function syncDriveVideos(){
-  if(!GDRIVE_API_KEY || !GDRIVE_FOLDERS.length) return;
-  try{
-    const map={};
-    for(const fid of GDRIVE_FOLDERS){
-      const q="'"+fid+"' in parents and mimeType contains 'video/' and trashed=false";
-      const url="https://www.googleapis.com/drive/v3/files?q="+encodeURIComponent(q)+"&key="+encodeURIComponent(GDRIVE_API_KEY)+"&fields=files(id,name)&pageSize=1000";
-      const r=await fetch(url); if(!r.ok){ console.warn('drive folder '+fid+' HTTP '+r.status); continue; }
-      const j=await r.json();
-      (j.files||[]).forEach(f=>{ const n=gdLessonNum(f.name); if(n!=null && map[n]==null) map[n]=f.id; });
-    }
-    if(Object.keys(map).length){ GD_VIDEOS=map; try{ localStorage.setItem('eqgym_gdvideos',JSON.stringify(map)); }catch(e){} if(UI.view==='lesson') render(); }
-  }catch(e){ console.warn('syncDriveVideos',e); }
-}
-function hasVideo(n){ const v=VIDEO_MAP[n]||{}; return !!(v.yt||v.gd||v.mp4||GD_VIDEOS[n]); }
+function hasVideo(n){ const v=VIDEO_MAP[n]||{}; return !!(v.yt||v.gd||v.mp4); }
 function videoFor(n){
   const v=VIDEO_MAP[n]||{}; const id=ytId(v.yt||'');
   if(id) return {type:'yt',id};
-  const gd=v.gd||GD_VIDEOS[n]; if(gd) return {type:'gd',id:gd};
+  const gd=v.gd; if(gd) return {type:'gd',id:gd};
   if(v.mp4 && UI.mp4Ok!==false) return {type:'mp4',src:v.mp4};
   return {type:'none'};
 }
@@ -559,9 +363,8 @@ function openStreak(){ sfx('tap'); UI.streakOpen=true; render(); }
 function complete(n){
   if(isDone(n)){ n<29?openLesson(n+1):goHome(); return; }
   S.done.push(n); S.bounty+=B_LESSON;
-  if(CODE_MODE&&MEMBER&&MEMBER.role==='member'){ try{ api({action:'event',code:MEMBER.code,event:'done-lesson',detail:'Buổi '+n+' — '+LESSONS[n].title}); }catch(e){} }
   const sres=bumpStreak(); let bonus=B_LESSON;
-  if(sres.day7){ S.bounty+=STREAK7_BONUS; bonus+=STREAK7_BONUS; if(CODE_MODE&&MEMBER&&MEMBER.role==='member'){ try{ api({action:'event',code:MEMBER.code,event:'streak7'}); }catch(e){} } }
+  if(sres.day7){ S.bounty+=STREAK7_BONUS; bonus+=STREAK7_BONUS; }
   save(); confettiRain(); sfx('chest');
   if(sres.freeze) toast('🧊 Đã dùng 1 Ngày nghỉ phép để giữ chuỗi '+S.streak+' ngày!');
   const newCertMs=checkCertMilestones();
@@ -887,7 +690,6 @@ async function applyCode(code,silent){ try{ const {data,error}=await sb.rpc('app
 async function applyVoucher(){ const code=val('vcinput'); if(!code){ toast('Nhập mã trước đã'); return; } await applyCode(code,false); render(); }
 async function autoApplyRef(){ let code=''; try{ code=localStorage.getItem('eqgym_ref_claimed')||''; }catch(e){} if(!code) return; const ok=await applyCode(code,true); if(ok&&UI.payOpen) render(); }
 function removeVoucher(){ UI.voucherCode=''; UI.voucherDiscount=0; UI.voucherKind=''; UI.voucherMsg=''; render(); }
-function openBookClaim(){ UI.payMode='book'; UI.payOpen=true; render(); }
 function closePay(){ UI.payOpen=false; if(!(UI.pay&&UI.pay.stage==='qr')) stopPayWatch(); render(); }
 
 /* ===== THANH TOÁN TỰ ĐỘNG (PayOS qua Edge Function) =====
@@ -912,7 +714,7 @@ async function createPayOrder(){
   }catch(e){ UI.pay={stage:'form'}; toast('Không tạo được mã QR: '+e.message); render(); }
   _payBusy=false;
 }
-function loadQrLib(){ if(window.QRCode) return Promise.resolve(); return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js'; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+function loadQrLib(){ if(window.QRCode) return Promise.resolve(); return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='vendor/qrcode-1.5.1.js'; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
 async function renderPayQR(o){ let img='';
   const viet=()=>(o.bin&&o.account_number)?`https://img.vietqr.io/image/${o.bin}-${o.account_number}-compact2.png?amount=${o.amount}&addInfo=${encodeURIComponent(o.description||'')}&accountName=${encodeURIComponent(o.account_name||'')}`:'';
   if(!o.qr_code) img=o.qr_image||viet();   /* SePay: ảnh QR do SePay dựng (VietinBank kèm SEVQR); dự phòng VietQR */
@@ -1114,7 +916,6 @@ function viewAff(){
 /* ===== RENDER ===== */
 function render(){
   const app=document.getElementById('app'); if(!app) return;
-  if(CODE_MODE && !MEMBER){ app.innerHTML=(OPEN_MODE&&!UI.adminLogin)?emailGate():viewLogin(); return; }
   let main='';
   if(UI.view==='home') main=viewHome();
   else if(UI.view==='lesson') main=viewLesson();
@@ -1122,7 +923,6 @@ function render(){
   else if(UI.view==='chat') main=viewChat();
   else if(UI.view==='quiz') main=viewQuiz();
   else if(UI.view==='rank') main=viewRank();
-  else if(UI.view==='admincode') main=viewAdminCode();
   else if(UI.view==='aff') main=viewAff();
   const wrap=`<div style="min-height:100vh;max-width:480px;margin:0 auto;position:relative;background:#F5F8FA;box-shadow:0 0 40px rgba(15,25,35,.08);padding-bottom:${UI.view==='lesson'?'calc(env(safe-area-inset-bottom) + 84px)':(UI.view==='chat'?'0':'calc(env(safe-area-inset-bottom) + 96px)')}">${main}</div>`;
   app.innerHTML=wrap+fixedUI();
@@ -1310,7 +1110,6 @@ function comicPageChip(){
   const upd=()=>{ let cur=1; const mid=window.innerHeight*0.35; imgs.forEach(im=>{ if(im.getBoundingClientRect().top<=mid) cur=+im.getAttribute('data-cmpg'); }); chip.textContent='Trang '+cur+'/'+imgs.length; };
   _cmScroll=upd; window.addEventListener('scroll',upd,{passive:true}); upd();
 }
-function wbEvent(n){ if(!(CODE_MODE&&MEMBER)) return; if(MEMBER.role!=='member'&&MEMBER.role!=='guest') return; try{ api({action:'event',code:MEMBER.code,event:'open-workbook',detail:'Bài '+n+' — '+LESSONS[n].title}); }catch(e){} }
 function lessonWorkbook(n,step){
   const N=step.pages||WORKBOOK[n]||0, pdf='workbook/bai-'+n+'.pdf?v='+WB_VER;
   let h=`<div style="display:inline-flex;align-items:center;gap:8px;font-family:'Space Grotesk';font-size:11.5px;font-weight:700;letter-spacing:1px;padding:7px 14px;border-radius:999px;background:#F3EEFF;border:1px solid #DDD2F5;color:#6B46C1;margin-bottom:12px">📘 WORKBOOK · ${Math.max(1,N-1)} TRANG</div>
@@ -1318,7 +1117,7 @@ function lessonWorkbook(n,step){
       <div style="font-family:'Space Grotesk';font-size:11px;font-weight:700;letter-spacing:2px;color:#C4B5FD">SỔ TAY LUYỆN TẬP · BÀI ${n}</div>
       <b style="display:block;font-size:14.5px;margin-top:3px;line-height:1.35">${esc(LESSONS[n].title)}</b>
       <p style="margin:6px 0 12px;font-size:12.5px;color:#D9D2F0;line-height:1.6;font-weight:600">Đọc ngay bên dưới, hoặc tải PDF để in ra và viết tay. Viết tay giúp bài học "ngấm" sâu hơn — rồi quay lại app nộp bài${AI_ENABLED?' cho Coach AI':''}.</p>
-      <a href="${pdf}" target="_blank" rel="noopener" onclick="sfx('tap');wbEvent(${n})" style="display:flex;align-items:center;justify-content:center;gap:8px;border-radius:12px;padding:13px;font-size:13.5px;font-weight:800;background:#fff;color:#3B2A6B;min-height:46px">⬇ Tải / In workbook PDF</a>
+      <a href="${pdf}" target="_blank" rel="noopener" onclick="sfx('tap')" style="display:flex;align-items:center;justify-content:center;gap:8px;border-radius:12px;padding:13px;font-size:13.5px;font-weight:800;background:#fff;color:#3B2A6B;min-height:46px">⬇ Tải / In workbook PDF</a>
     </div>`;
   h+=zvHint();
   /* Trang 1 của workbook là trang bìa → bắt đầu từ trang bài tập đầu tiên (PDF tải về vẫn đủ trang) */
@@ -1410,7 +1209,7 @@ function fixedUI(){
   let h='';
   if(UI.view!=='lesson'){
     const items=[['home','⚑','Lộ trình'],['quiz','◈','Test EQ']]; if(AI_ENABLED) items.push(['chat','✦','Coach']); items.push(['journal','✎','Nhật ký']);
-    if(CODE_MODE||BACKEND) items.push(['rank',ICON_TROPHY,'Thi đua']);
+    if(BACKEND) items.push(['rank',ICON_TROPHY,'Thi đua']);
     items.push(['settings','⚙','Tài khoản']);
     h+=`<div style="position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(255,255,255,.97);backdrop-filter:blur(14px);border-top:1px solid #E3E8EE;display:flex;padding:6px 0 calc(env(safe-area-inset-bottom) + 8px);z-index:40">`;
     items.forEach(it=>{ const active=UI.view===it[0]; const on=it[0]==='settings'?'openSettings()':(it[0]==='rank'?'openRank()':`nav('${it[0]}')`);
@@ -1440,32 +1239,6 @@ function fixedUI(){
 }
 function sheet(inner){ return `<div onclick="if(event.target===this){UI.settingsOpen=false;UI.musicOpen=false;UI.streakOpen=false;render()}" style="position:fixed;inset:0;background:rgba(15,25,35,.45);backdrop-filter:blur(6px);z-index:70;display:flex;align-items:flex-end;justify-content:center"><div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:480px;max-height:92vh;overflow-y:auto;padding:22px 20px calc(env(safe-area-inset-bottom) + 24px);animation:up .28s ease">${inner}</div></div>`; }
 function sheetSettings(){
-  if(CODE_MODE && OPEN_MODE && (!MEMBER||MEMBER.role!=='admin')){
-    const m=MEMBER||{};
-    return sheet(`<h3 style="margin:2px 0 10px;font-family:'Space Grotesk';font-size:17px;font-weight:700">Tài khoản dùng thử 🌱</h3>
-      <div style="background:linear-gradient(150deg,#0F1923,#0A8C77 130%);border-radius:16px;padding:15px 16px;color:#fff">
-        <div style="font-size:11px;color:#7FA39B;font-weight:800;letter-spacing:1.5px">EQ GYM · DÙNG THỬ</div>
-        <div style="font-size:17px;font-weight:800;margin-top:3px">${esc(m.name||'Khách')}</div>
-        <div style="font-size:12.5px;color:#BFEFE4;font-weight:700;margin-top:2px">${esc(m.email||'')} · <span style="color:#fff">${fmtEP(S.bounty)} EP</span></div>
-      </div>
-      <p style="color:#5C6B7A;font-size:12px;line-height:1.65;margin:12px 2px 0;font-weight:600">✨ Coach AI đã bật sẵn. Tiến độ học tự lưu theo email của bạn — vào lại bằng email này là học tiếp được. Đua điểm ở tab 🏆 Thi đua nhé!</p>
-      ${latestCertMilestone()?certBtnHtml():''}
-      <button onclick="guestLogout()" style="width:100%;margin-top:14px;border:1px solid #E3E8EE;border-radius:14px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;background:#fff;color:#5C6B7A;min-height:46px">Đổi email / Thoát</button>`);
-  }
-  if(CODE_MODE){
-    const m=MEMBER||{};
-    let h=`<h3 style="margin:2px 0 10px;font-family:'Space Grotesk';font-size:17px;font-weight:700">Tài khoản</h3>
-      <div style="background:linear-gradient(150deg,#0F1923,#0A8C77 130%);border-radius:16px;padding:15px 16px;color:#fff">
-        <div style="font-size:11px;color:#7FA39B;font-weight:800;letter-spacing:1.5px">THÀNH VIÊN EQ GYM${m.role==='admin'?' · ADMIN':''}</div>
-        <div style="font-size:18px;font-weight:800;margin-top:3px">${esc(m.name||'')}</div>
-        <div style="font-family:'Space Grotesk';font-size:12.5px;color:#BFEFE4;font-weight:700;margin-top:2px">Mã: ${esc(m.code||'')} · <span style="color:#fff">${fmtEP(S.bounty)} EP</span></div>
-      </div>
-      <p style="color:#5C6B7A;font-size:12px;line-height:1.6;margin:12px 2px 0;font-weight:600">✨ Coach AI đã bật sẵn (dùng chung của EQ GYM) — bạn chỉ việc luyện tập, không cần cấu hình gì thêm.</p>`;
-    if(m.role==='admin') h+=`<button onclick="openAdminCode()" style="width:100%;margin-top:14px;border:none;border-radius:14px;padding:14px;font-size:14px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#0F1923,#0A6E5D);color:#fff;min-height:48px">🛡️ Cấp mã học viên</button>`;
-    if(latestCertMilestone()) h+=certBtnHtml();
-    h+=`<button onclick="logoutMember()" style="width:100%;margin-top:10px;border:1px solid #E3E8EE;border-radius:14px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;background:#fff;color:#5C6B7A;min-height:46px">Đăng xuất</button>`;
-    return sheet(h);
-  }
   return sheet(acctHtml());
 }
 function sheetMusic(){
@@ -1510,16 +1283,15 @@ const CERT_MILESTONES=[
   {days:180, title:'EQ MASTER'},
   {days:365, title:'EQ AMBASSADOR'}
 ];
-function certId(days){ const s=String((MEMBER&&MEMBER.code)||'LOCAL').replace(/[^A-Z0-9]/gi,'').toUpperCase(); const t=Date.now().toString(36).toUpperCase(); return 'EQG-'+days+'-'+new Date().getFullYear()+'-'+(s.slice(-4)||'XXXX')+'-'+t.slice(-5); }
-function makeCertFor(days,title){ return {id:certId(days),name:((MEMBER&&MEMBER.name)||'').trim(),ts:Date.now(),milestone:days,title,desc:'Completed '+days+' Days of EQ Practice'}; }
+function certId(days){ const s='LOCAL'; const t=Date.now().toString(36).toUpperCase(); return 'EQG-'+days+'-'+new Date().getFullYear()+'-'+(s.slice(-4)||'XXXX')+'-'+t.slice(-5); }
+function makeCertFor(days,title){ return {id:certId(days),name:'',ts:Date.now(),milestone:days,title,desc:'Completed '+days+' Days of EQ Practice'}; }
 function latestCertMilestone(){ const ks=Object.keys(S.certs||{}).map(Number); return ks.length?Math.max(...ks):null; }
 function checkCertMilestones(){
   S.certs=S.certs||{}; let newest=null;
   CERT_MILESTONES.forEach(m=>{ if((S.streak||0)>=m.days && !S.certs[m.days]){ S.certs[m.days]=makeCertFor(m.days,m.title); newest=m.days; } });
-  if(newest){ save(); certEvent(newest); }
+  if(newest){ save(); }
   return newest;
 }
-function certEvent(days){ if(!(CODE_MODE&&MEMBER)) return; const c=S.certs&&S.certs[days]; if(!c) return; if(MEMBER.role!=='member'&&MEMBER.role!=='guest') return; try{ api({action:'event',code:MEMBER.code,event:'certificate',detail:c.id+' · '+days+' ngày · '+(c.name||'(chưa nhập tên)')}); }catch(e){} }
 function openCert(days){ const m=days||latestCertMilestone(); if(!m||!(S.certs&&S.certs[m])) return; sfx('success'); UI.settingsOpen=false; UI.certOpen=m; UI.certImg=null; render(); renderCert(m); }
 function closeCert(){ UI.certOpen=null; render(); }
 function certFile(days){ const c=S.certs&&S.certs[days]; return 'EQ-GYM-Chung-nhan-'+(c?c.id:'')+'.png'; }
@@ -1592,7 +1364,6 @@ async function shareCert(){ if(!UI.certImg){ toast('Đang tạo ảnh, đợi ch
   toast('Thiết bị chưa hỗ trợ chia sẻ trực tiếp — hãy tải ảnh về rồi chia sẻ nhé'); }
 function certCardHome(){ const m=latestCertMilestone(); if(!m) return ''; const c=S.certs[m];
   return `<div onclick="openCert(${m})" style="margin:12px 16px 0;background:linear-gradient(135deg,#FFF3D6,#FFE1A8);border:1px solid #F2D9A8;border-radius:18px;padding:14px 16px;display:flex;align-items:center;gap:13px;cursor:pointer;box-shadow:0 10px 26px rgba(224,147,10,.18)"><div style="width:46px;height:46px;border-radius:14px;background:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;flex:0 0 46px">🎓</div><div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:800;letter-spacing:1px;color:#5A3C00">GIẤY CHỨNG NHẬN · ${esc(c.title)}</div><div style="font-size:14px;font-weight:800;color:#0F1923;line-height:1.3;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.name||'Nhập tên để in chứng nhận')}</div><div style="font-size:12px;color:#8A6A1E;font-weight:700;margin-top:2px">${m} ngày · ${esc(certDate(c))}</div></div><span style="font-size:20px;color:#B27607;font-weight:800">›</span></div>`; }
-function certBtnHtml(){ const n=Object.keys(S.certs||{}).length; return `<button onclick="openCert()" style="width:100%;margin-top:12px;border:none;border-radius:14px;padding:14px;font-size:14px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#9A5200,#7A4000);color:#fff;min-height:48px">🎓 Xem giấy chứng nhận (${n})</button>`; }
 function modalCert(){
   const m=UI.certOpen, c=(S.certs&&S.certs[m])||{};
   const earned=Object.keys(S.certs||{}).map(Number).sort((a,b)=>a-b);
@@ -1643,7 +1414,7 @@ function modalZoom(){ const z=UI.zv, N=z.urls.length; const btn='border:none;bor
   </div>`; }
 
 /* ===== 📄 PDF.js — render trang workbook từ PDF (nét ở mọi mức zoom); lỗi tải thư viện -> tự quay về ảnh JPG ===== */
-const PDFJS_URL='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', PDFJS_WORKER='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const PDFJS_URL='vendor/pdfjs-3.11.174/pdf.min.js', PDFJS_WORKER='vendor/pdfjs-3.11.174/pdf.worker.min.js';
 let _pdfjsP=null; const _pdfDocs={};
 function loadPdfJs(){ if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib); if(_pdfjsP) return _pdfjsP;
   _pdfjsP=new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src=PDFJS_URL; const tm=setTimeout(()=>{ _pdfjsP=null; rej(new Error('pdfjs timeout')); },8000); sc.onload=()=>{ clearTimeout(tm); try{ window.pdfjsLib.GlobalWorkerOptions.workerSrc=PDFJS_WORKER; res(window.pdfjsLib); }catch(e){ rej(e); } }; sc.onerror=()=>{ clearTimeout(tm); _pdfjsP=null; rej(new Error('pdfjs load')); }; document.head.appendChild(sc); });
@@ -1737,14 +1508,16 @@ function captureUrlParams(){
     if(changed) history.replaceState(null,'',url.pathname+url.search+url.hash);
   }catch(e){}
 }
+function libErrorScreen(){
+  return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:28px;background:#F5F8FA;text-align:center"><div style="max-width:340px"><div style="font-size:42px">📡</div><h2 style="font-family:'Space Grotesk';font-size:19px;margin:10px 0 6px;color:#0F1923">Chưa tải được ứng dụng</h2><p style="color:#5C6B7A;font-size:13.5px;font-weight:600;line-height:1.6;margin:0 0 16px">Kết nối mạng đang không ổn định hoặc bị chặn. Hãy kiểm tra mạng rồi tải lại trang nhé.</p><button onclick="location.reload()" style="border:none;border-radius:14px;padding:14px 26px;font-size:15px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#0A8570,#076F5E);color:#fff">Tải lại</button></div></div>`;
+}
 async function boot(){
+  /* Thư viện đăng nhập không tải được → báo lỗi và dừng, tuyệt đối không mở khoá nội dung Premium */
+  if(BACKEND_CONFIGURED && !BACKEND){ document.getElementById('app').innerHTML=libErrorScreen(); return; }
   captureUrlParams();
   if(BACKEND){ try{ await initAuth(); }catch(e){ console.warn(e); } }
-  if(CODE_MODE && OPEN_MODE){ const g=guestStored(); if(g&&g.email){ try{ const d=await api({action:'guest',name:g.name,email:g.email}); if(d&&d.ok){ MEMBER={code:d.code,name:d.name,role:'guest',session:d.session||'',email:g.email}; try{ localStorage.setItem('eqgym_guest',JSON.stringify({code:d.code,session:d.session,name:d.name,email:g.email})); }catch(e){} if(d.progress) applyProgress(d.progress); } else { try{ localStorage.removeItem('eqgym_guest'); }catch(e){} } }catch(e){} } }
-  else if(CODE_MODE){ const c=memberCode(); if(c){ try{ const d=await api({action:'login',code:c}); if(d&&d.ok){ MEMBER={code:c,name:d.name,points:d.points||0,role:d.role,session:d.session||''}; try{localStorage.setItem('eqgym_session',MEMBER.session||'');}catch(e){} if(d.role==='member'){ if(d.progress) applyProgress(d.progress); else S.bounty=d.points||0; startHeartbeat(); } } else { try{ localStorage.removeItem('eqgym_code'); localStorage.removeItem('eqgym_session'); }catch(e){} } }catch(e){} } }
-  if(!CODE_MODE && !S.quiz && (!S.done||!S.done.length)){ UI.view='quiz'; }
+  if(!S.quiz && (!S.done||!S.done.length)){ UI.view='quiz'; }
   render();
-  syncDriveVideos();
 }
 boot();
 </script>
