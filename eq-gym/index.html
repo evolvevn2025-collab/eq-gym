@@ -16,7 +16,8 @@
 <link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Nunito:wght@400;600;700;800&family=Dancing+Script:wght@700&display=swap" rel="stylesheet">
-<script src="vendor/supabase-js-2.117.2.js"></script>
+<script>window.__libTry=function(){ if(window.supabase) return; document.write('<script src="vendor/supabase-js-2.117.2.js?r='+Date.now()+'"><\/script>'); };</script>
+<script src="vendor/supabase-js-2.117.2.js?v=20261005" onerror="__libTry()"></script>
 <style>
 html,body{margin:0;padding:0;background:#E9EDF2}
 body{font-family:'Nunito',-apple-system,BlinkMacSystemFont,sans-serif;color:#0F1923;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
@@ -1532,17 +1533,24 @@ function captureUrlParams(){
     const ref=(url.searchParams.get('ref')||'').trim().toUpperCase();
     const tag=(url.searchParams.get('t')||'').trim().toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,40);
     if(ref){ try{ localStorage.setItem('eqgym_ref',ref); if(tag) localStorage.setItem('eqgym_ref_tag',tag); else localStorage.removeItem('eqgym_ref_tag'); }catch(e){} if(!IN_APP_BROWSER){ url.searchParams.delete('ref'); url.searchParams.delete('t'); changed=true; } trackAffClick(ref,tag); }
+    if(url.searchParams.has('r')){ url.searchParams.delete('r'); changed=true; }
     const pay=url.searchParams.get('pay');
     if(pay){ url.searchParams.delete('pay'); changed=true; setTimeout(()=>toast(pay==='done'?'Đã nhận thanh toán — Premium sẽ tự kích hoạt trong giây lát':'Bạn đã huỷ thanh toán'),600); }
     if(changed) history.replaceState(null,'',url.pathname+url.search+url.hash);
   }catch(e){}
 }
 function libErrorScreen(){
-  return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:28px;background:#F5F8FA;text-align:center"><div style="max-width:340px"><div style="font-size:42px">📡</div><h2 style="font-family:'Space Grotesk';font-size:19px;margin:10px 0 6px;color:#0F1923">Chưa tải được ứng dụng</h2><p style="color:#5C6B7A;font-size:13.5px;font-weight:600;line-height:1.6;margin:0 0 16px">Kết nối mạng đang không ổn định hoặc bị chặn. Hãy kiểm tra mạng rồi tải lại trang nhé.</p><button onclick="location.reload()" style="border:none;border-radius:14px;padding:14px 26px;font-size:15px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#0A8570,#076F5E);color:#fff">Tải lại</button></div></div>`;
+  return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:28px;background:#F5F8FA;text-align:center"><div style="max-width:340px"><div style="font-size:42px">📡</div><h2 style="font-family:'Space Grotesk';font-size:19px;margin:10px 0 6px;color:#0F1923">Chưa tải được ứng dụng</h2><p style="color:#5C6B7A;font-size:13.5px;font-weight:600;line-height:1.6;margin:0 0 16px">Kết nối mạng đang không ổn định hoặc bị chặn. Hãy kiểm tra mạng rồi tải lại trang nhé.</p><button onclick="try{sessionStorage.removeItem('eqgym_libretry')}catch(e){}location.replace(libReloadUrl())" style="border:none;border-radius:14px;padding:14px 26px;font-size:15px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#0A8570,#076F5E);color:#fff">Tải lại</button></div></div>`;
 }
+function libReloadUrl(){ try{ const u=new URL(location.href); u.searchParams.set('r',Date.now()); return u.toString(); }catch(e){ return location.href; } }
 async function boot(){
   /* Thư viện đăng nhập không tải được → báo lỗi và dừng, tuyệt đối không mở khoá nội dung Premium */
-  if(BACKEND_CONFIGURED && !BACKEND){ document.getElementById('app').innerHTML=libErrorScreen(); return; }
+  if(BACKEND_CONFIGURED && !BACKEND){
+    /* Tự thử lại 1 lần (kèm tham số chống đệm) trước khi báo lỗi — phòng trình duyệt giữ bản đệm hỏng sau khi đổi máy chủ */
+    try{ if(!sessionStorage.getItem('eqgym_libretry')){ sessionStorage.setItem('eqgym_libretry','1'); location.replace(libReloadUrl()); return; } }catch(e){}
+    document.getElementById('app').innerHTML=libErrorScreen(); return;
+  }
+  try{ sessionStorage.removeItem('eqgym_libretry'); }catch(e){}
   captureUrlParams();
   if(BACKEND){ try{ await initAuth(); }catch(e){ console.warn(e); } }
   if(!S.quiz && (!S.done||!S.done.length)){ UI.view='quiz'; }
