@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
+<script>/* Địa chỉ thiếu dấu "/" cuối (vd /eq-gym) làm đường dẫn tương đối (vendor/, ../) bị lệch → chuyển về dạng có "/" */
+(function(){var p=location.pathname;if(p.slice(-1)!=='/'&&!/\.[A-Za-z0-9]+$/.test(p))location.replace(p+'/'+location.search+location.hash);})();</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
