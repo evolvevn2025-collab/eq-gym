@@ -91,8 +91,8 @@ export function classifyPath(rawPathname, freeMax = 2) {
   if (suspicious) return 'gated';
   const num = '(0|[1-9]\\d?)';
   const free = [
-    new RegExp(`^/eq-gym/comics/l${num}/p\\d{2}\\.jpg$`),
-    new RegExp(`^/eq-gym/workbook/w${num}/p\\d{2}\\.jpg$`),
+    new RegExp(`^/eq-gym/comics/l${num}/p\\d{2}\\.(?:jpg|webp)$`),   // ảnh trang: .webp từ 10/2026, .jpg cũ
+    new RegExp(`^/eq-gym/workbook/w${num}/p\\d{2}\\.(?:jpg|webp)$`),
     new RegExp(`^/eq-gym/workbook/bai-${num}\\.pdf$`),
   ];
   for (const re of free) {

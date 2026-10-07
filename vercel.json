@@ -38,6 +38,12 @@
       ]
     },
     {
+      "source": "/eq-gym/art/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
       "source": "/eq-gym/(music|videos)/(.*)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=2592000" },
