@@ -290,9 +290,9 @@ function isPremium(){ return !!(!BACKEND_CONFIGURED || (AUTH && (AUTH.role==='ad
 function isLifetime(d){ return !!d && new Date(d).getFullYear()>=2900; }
 function premiumUntilText(d){ return isLifetime(d)?'Premium trọn đời':'Premium đến '+new Date(d).toLocaleDateString('vi-VN'); }
 function isAdmin(){ return AUTH && (AUTH.role==='admin'||AUTH.role==='super_admin'); }
-/* Học thử miễn phí: buổi 0 → FREE_LESSON_MAX (vẫn phải học lần lượt); từ buổi sau cần Premium */
+/* Học viên tự chọn buổi, không cần học xong buổi trước (08/10/2026). Học thử miễn phí: buổi 0 → FREE_LESSON_MAX; từ buổi sau cần Premium */
 const FREE_LESSON_MAX=2;
-function unlocked(n){ if(n===0) return true; if(n>FREE_LESSON_MAX && !isPremium()) return false; return isDone(n-1); }
+function unlocked(n){ return n<=FREE_LESSON_MAX || isPremium(); }
 function rankOf(d){ let r=RANKS[0]; for(const x of RANKS){ if(d>=x[0]) r=x; } return r; }
 function nextRank(d){ for(const x of RANKS){ if(d<x[0]) return x; } return null; }
 function ytId(s){ if(!s) return ''; s=s.trim(); const m=s.match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([\w-]{6,})/); return m?m[1]:(/^[\w-]{6,}$/.test(s)?s:''); }
@@ -343,7 +343,7 @@ function buildSteps(n){
   return steps;
 }
 function openLesson(n){
-  if(!unlocked(n)){ sfx('err'); if(BACKEND && !isPremium() && n>FREE_LESSON_MAX){ UI.premOpen=true; render(); } else toast('Hoàn thành buổi tập trước để mở khóa buổi này nhé!'); return; }
+  if(!unlocked(n)){ sfx('err'); if(BACKEND){ UI.premOpen=true; render(); } else toast('Chưa tải được tài khoản — tải lại trang để mở buổi này nhé!'); return; }
   sfx('tap'); STEPS=buildSteps(n);
   if(!(history.state&&history.state.eqLesson)){ try{ history.pushState({eqLesson:1},''); }catch(e){} }
   UI.view='lesson'; UI.n=n; UI.step=0; UI.grading=false; UI.mp4Ok=null; UI.scenLoading=false;
@@ -402,8 +402,10 @@ function repairStreak(){ if(!S.broken||repairLeftMs()<=0) return; if(epLocked())
   S.bounty-=cost; S.streak=S.broken.streak; S.bestStreak=Math.max(S.bestStreak||0,S.streak); S.broken=null; save(); sfx('success'); confettiRain(); toast('🔥 Đã khôi phục chuỗi '+S.streak+' ngày!'); render(); }
 function openStreak(){ sfx('tap'); UI.streakOpen=true; render(); }
 
+/* Buổi kế tiếp chưa học, tính từ sau buổi n (học viên tự chọn thứ tự nên n+1 có thể đã xong) */
+function nextUndone(n){ for(let i=1;i<30;i++){ const m=(n+i)%30; if(!isDone(m)) return m; } return null; }
 function complete(n){
-  if(isDone(n)){ n<29?openLesson(n+1):goHome(); return; }
+  if(isDone(n)){ const nx=nextUndone(n); nx!=null?openLesson(nx):goHome(); return; }
   S.done.push(n); S.bounty+=B_LESSON;
   const sres=bumpStreak(); let bonus=B_LESSON;
   if(sres.day7){ S.bounty+=STREAK7_BONUS; bonus+=STREAK7_BONUS; }
@@ -417,8 +419,8 @@ function complete(n){
   else if(d>=30){ title='BẬC THẦY EQ!'; msg='Bạn đã hoàn thành trọn vẹn 30 buổi của hành trình EQ GYM. Thành quả lớn nhất là con người mới của bạn!'; rc='#E0930A'; }
   else if(sres.day7){ title='🔥 CHUỖI 7 NGÀY!'; msg='Bạn đã luyện tập liên tục 7 ngày — thói quen đang hình thành! Huy hiệu "Tuần Đầu Tiên" đã mở khóa cùng phần thưởng đặc biệt.'; rc='#E85B5B'; }
   else if(r[1]!==pr[1]){ title='THĂNG HẠNG: '+r[1]+'!'; rc='#E0930A'; var newBadge=r[1]; }
-  else if((n===12&&mdone(1))||(n===20&&mdone(2))||(n===29&&mdone(3))){ title='HUY CHƯƠNG MỚI!'; rc='#4A9EFF'; }
-  UI.treasure={title,msg,rc,earn:'+'+fmtEP(bonus,true)+' EP',btn:newCertMs?'🎓 Nhận giấy chứng nhận':(n<29?'Sang buổi tập tiếp theo ›':'Về lộ trình'),next:n<29?n+1:null,certMs:newCertMs||null,badge:(typeof newBadge!=='undefined'&&!newCertMs)?newBadge:null};
+  else if(mdone(LESSONS[n].module)){ title='HUY CHƯƠNG MỚI!'; rc='#4A9EFF'; }
+  UI.treasure={title,msg,rc,earn:'+'+fmtEP(bonus,true)+' EP',btn:newCertMs?'🎓 Nhận giấy chứng nhận':(nextUndone(n)!=null?'Sang buổi tập tiếp theo ›':'Về lộ trình'),next:nextUndone(n),certMs:newCertMs||null,badge:(typeof newBadge!=='undefined'&&!newCertMs)?newBadge:null};
   render();
 }
 function closeTreasure(){ const t=UI.treasure; UI.treasure=null; if(t&&t.certMs){ goHome(); openCert(t.certMs); return; } if(t&&t.next!=null&&AUTO_NEXT) openLesson(t.next); else goHome(); }
@@ -1318,7 +1320,7 @@ function lessonPractice(n,step){
 function lessonFinish(n,done){
   return `<div style="text-align:center;padding:26px 6px 8px"><div style="animation:pop .5s ease"><img src="art/done.webp?v=3" alt="" decoding="async" style="width:210px;height:210px;border-radius:50%;object-fit:cover;box-shadow:0 12px 30px rgba(60,45,20,.12)"></div>
     <h2 style="font-family:'Be Vietnam Pro';font-size:21px;margin:14px 0 6px;font-weight:700">${done?'Buổi tập đã hoàn thành!':'Sẵn sàng chốt buổi tập?'}</h2>
-    <p style="color:#5C6B7A;font-size:14px;line-height:1.65;margin:0;font-weight:600">${done?'Bạn đã hoàn thành buổi này. Ôn lại bất cứ lúc nào!':'Hoàn thành buổi '+n+' để nhận +'+fmtEP(B_LESSON,true)+' EP và mở khóa buổi tiếp theo.'}</p></div>`;
+    <p style="color:#5C6B7A;font-size:14px;line-height:1.65;margin:0;font-weight:600">${done?'Bạn đã hoàn thành buổi này. Ôn lại bất cứ lúc nào!':'Hoàn thành buổi '+n+' để nhận +'+fmtEP(B_LESSON,true)+' EP.'}</p></div>`;
 }
 
 function viewJournal(){
