@@ -276,10 +276,21 @@ async function setCommission(id,status){
   if(msg&&!confirm(msg)) return;
   try{ const {error}=await sb.rpc('admin_set_commission_status',{p_id:id,p_status:status}); if(error) throw error; loadAffiliate(); }catch(e){ alert('Lỗi: '+e.message); }
 }
+function premPrice(){ const v=DATA.settings&&DATA.settings.premium_price; return v!=null?+v:990000; }
+function affDisc(){ const s=DATA.settings||{}; return s.affiliate_referee_discount!=null?+s.affiliate_referee_discount:50000; }
+/* Xem trước: với mức giảm này bạn bè trả bao nhiêu, người giới thiệu nhận bao nhiêu theo từng hạng (giống công thức của server) */
+function affPreviewHtml(disc){
+  const price=premPrice(), d=Math.max(0,+disc||0), paid=Math.max(0,price-d), tr=tierRates();
+  if(d>=price) return `<span style="color:#C74848">Mức giảm phải nhỏ hơn giá Premium (${fmt(price)}đ).</span>`;
+  return `Giá Premium <b>${fmt(price)}đ</b> → bạn bè trả <b style="color:#0F1923">${fmt(paid)}đ</b>. Người giới thiệu nhận mỗi đơn: `+AFF_TIERS.map(([k,label])=>`${label.split(',')[0]} <b style="color:#E0930A">${fmt(Math.round(paid*tr[k]))}đ</b>`).join(' · ');
+}
+function affPreview(){ const el=$('as_prev'), i=$('as_disc'); if(el&&i) el.innerHTML=affPreviewHtml(parseInt(i.value||'0',10)); }
 async function saveAffSettings(){
   if(AUTH.role!=='super_admin'){ alert('Chỉ Super Admin được sửa cấu hình affiliate'); return; }
   const tiers={}; for(const [k,label] of AFF_TIERS){ const v=parseFloat(($('as_tier_'+k).value||'').replace(',','.'))/100; if(isNaN(v)||v<0||v>1){ alert('% hoa hồng "'+label+'" phải từ 0 đến 100'); return; } tiers[k]=Math.round(v*10000)/10000; }
   const disc=parseInt($('as_disc').value||'0',10), hold=parseInt($('as_hold').value||'0',10);
+  if(isNaN(disc)||disc<0||disc>=premPrice()){ alert('Mức giảm cho bạn bè phải từ 0 đến dưới giá Premium ('+fmt(premPrice())+'đ)'); return; }
+  if(disc!==affDisc()&&!confirm('Đổi mức giảm cho bạn bè từ '+fmt(affDisc())+'đ thành '+fmt(disc)+'đ?\n\nÁp dụng cho đơn tạo từ bây giờ; đơn đang chờ thanh toán giữ số tiền cũ.')) return;
   const now=new Date().toISOString();
   const rows=[{key:'affiliate_enabled',value:$('as_enabled').checked},{key:'affiliate_tiers',value:tiers},{key:'affiliate_rate',value:tiers.standard},{key:'affiliate_referee_discount',value:disc||0},{key:'affiliate_hold_days',value:hold||0}].map(r=>({...r,updated_at:now}));
   UI.affBusy=true; render();
@@ -603,6 +614,9 @@ function viewVouchers(){
   let h=header('Mã giảm giá','Tạo & quản lý voucher');
   h+=`<div style="padding:14px 16px 90px">`;
   const canEditV=!!(AUTH&&AUTH.role==='super_admin');
+  if(DATA.settings) h+=card(`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div style="flex:1;min-width:0"><div style="font-size:11px;color:#8A6A2E;font-weight:800;letter-spacing:.3px">MÃ GIỚI THIỆU (AFFILIATE)</div>
+      <div style="font-size:13px;font-weight:700;margin-top:3px;line-height:1.5">Bạn bè dùng mã giới thiệu được giảm <b style="font-family:'Space Grotesk';font-size:15px;color:#E0930A">${fmt(affDisc())}đ</b> · trả ${fmt(Math.max(0,premPrice()-affDisc()))}đ</div></div>
+      <button onclick="nav('affiliate')" style="border:none;border-radius:11px;padding:9px 12px;font-size:12px;font-weight:800;cursor:pointer;background:#0F1923;color:#fff;white-space:nowrap;min-height:38px">${canEditV?'Đổi mức giảm ›':'Xem ›'}</button></div>`,'background:#FFF8EA;border-color:#F3E2BC');
   if(!canEditV) h+=`<p style="color:#5C6B7A;font-size:12.5px;font-weight:700;margin:0 2px 12px">🔒 Chỉ Super Admin được tạo / sửa / bật tắt mã giảm giá.</p>`;
   else h+=card(`<div style="display:flex;gap:8px;flex-wrap:wrap">
       <input id="vf_code" placeholder="MÃ (vd GIAM50K)" style="flex:1;min-width:120px;background:#F5F8FA;border:1px solid #E3E8EE;border-radius:11px;padding:11px;font-size:13px;text-transform:uppercase">
@@ -763,16 +777,17 @@ function viewAffiliate(){
       ${card(`<div style="font-size:17px;font-weight:800;font-family:'Space Grotesk';color:#0A8C77">${fmt(st.paid_sum)}đ</div><div style="font-size:10px;color:#5C6B7A;font-weight:700;margin-top:2px">Đã trả</div>`,'flex:1;text-align:center;margin-bottom:0;padding:10px 6px')}
     </div><div style="font-size:11.5px;color:#5C6B7A;font-weight:700;margin:-4px 2px 12px">${fmt(st.referrers)} người đã có hoa hồng · ${fmt(st.referred_users)} học viên vào qua giới thiệu</div>`;
   const inp='background:#F5F8FA;border:1px solid #E3E8EE;border-radius:11px;padding:10px;font-size:13px;width:100%';
-  const tr=tierRates(), disc=s.affiliate_referee_discount!=null?+s.affiliate_referee_discount:50000, hold=s.affiliate_hold_days!=null?+s.affiliate_hold_days:7, on=s.affiliate_enabled!==false, su=AUTH.role==='super_admin', dis=su?'':'disabled';
+  const tr=tierRates(), disc=affDisc(), hold=s.affiliate_hold_days!=null?+s.affiliate_hold_days:7, on=s.affiliate_enabled!==false, su=AUTH.role==='super_admin', dis=su?'':'disabled';
   h+=card(`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><b style="font-size:13.5px">⚙️ Cấu hình chương trình</b><label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:800;color:${on?'#0A6E5D':'#5C6B7A'}"><input type="checkbox" id="as_enabled" ${on?'checked':''} ${dis} style="width:18px;height:18px;accent-color:#0FB89B">Đang bật</label></div>
     <div style="font-size:11px;color:#5C6B7A;font-weight:800;margin-bottom:6px">% hoa hồng theo hạng người giới thiệu</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
       ${AFF_TIERS.map(([k,label])=>`<label style="font-size:10.5px;color:#5C6B7A;font-weight:700;line-height:1.3">${label}<input id="as_tier_${k}" type="number" step="0.5" min="0" max="100" value="${Math.round(tr[k]*1000)/10}" ${dis} style="${inp};margin-top:4px"></label>`).join('')}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-      <label style="font-size:10.5px;color:#5C6B7A;font-weight:700">Giảm người mới (đ)<input id="as_disc" type="number" min="0" step="1000" value="${disc}" ${dis} style="${inp};margin-top:4px"></label>
+      <label style="font-size:10.5px;color:#5C6B7A;font-weight:700">Bạn bè dùng mã được giảm (đ)<input id="as_disc" type="number" min="0" step="1000" value="${disc}" ${dis} oninput="affPreview()" style="${inp};margin-top:4px"></label>
       <label style="font-size:10.5px;color:#5C6B7A;font-weight:700">Giữ (ngày)<input id="as_hold" type="number" min="0" value="${hold}" ${dis} style="${inp};margin-top:4px"></label>
     </div>
+    <div id="as_prev" style="margin-top:8px;background:#FFF8EA;border:1px solid #F3E2BC;border-radius:11px;padding:9px 11px;font-size:11.5px;color:#5C4A27;font-weight:600;line-height:1.6">${affPreviewHtml(disc)}</div>
     <p style="margin:8px 0 0;font-size:11px;color:#8A97A5;font-weight:600;line-height:1.5">Mỗi học viên có sẵn mã giới thiệu 6 ký tự, mặc định hạng Cá nhân. Đổi hạng từng người ở tab Học viên. Người mới nhập mã khi nâng cấp lần đầu được giảm; người giới thiệu nhận % theo hạng trên số tiền thực trả. "Giữ" = số ngày sau thanh toán mới nên duyệt (phòng hoàn tiền).</p>
     ${su?`<button onclick="saveAffSettings()" ${UI.affBusy?'disabled':''} style="width:100%;margin-top:10px;border:none;border-radius:12px;padding:12px;font-weight:800;cursor:pointer;background:#0F1923;color:#fff;min-height:44px;opacity:${UI.affBusy?.6:1}">${UI.affBusy?'Đang lưu...':'Lưu cấu hình'}</button>`:`<p style="margin:10px 0 0;font-size:11.5px;color:#B25E09;font-weight:700">🔒 Chỉ Super Admin được sửa cấu hình.</p>`}`);
   h+=`<div style="display:flex;gap:5px;margin-bottom:10px;overflow-x:auto">${Object.entries(AFF_STATUS).map(([v,l])=>`<button onclick="setAffStatus('${v}')" style="flex:1;white-space:nowrap;border:1px solid ${UI.affStatus===v?'#0FB89B':'#E3E8EE'};border-radius:10px;padding:8px 9px;font-size:11px;font-weight:800;cursor:pointer;background:${UI.affStatus===v?'#EAFBF6':'#fff'};color:${UI.affStatus===v?'#0A6E5D':'#5C6B7A'}">${l}</button>`).join('')}</div>`;
