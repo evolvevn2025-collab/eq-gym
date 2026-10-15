@@ -1,13 +1,15 @@
-# Kiểm tra hệ thống 6 tiếng/lần: app + trang Quản trị mở được, database trả lời, webhook SePay
-# còn cấu hình. Lỗi → workflow đỏ → GitHub gửi email cho chủ repo.
+# Kiểm tra hệ thống 6 tiếng/lần VÀ ngay sau mỗi lần Vercel cập nhật bản Production:
+# app + trang Quản trị mở được, database trả lời, webhook SePay đang chạy và đòi khoá, cổng chặn nội dung Premium còn chặn.
+# Lỗi → workflow đỏ → GitHub gửi email cho chủ repo (+ Telegram nếu đặt secret TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID).
 # Lần gọi database cũng giữ cho Supabase (gói miễn phí) không tự tạm dừng sau 7 ngày không hoạt động.
-# Không cần secret: anon key vốn công khai trong app, đọc thẳng từ trang live.
+# Không cần secret bắt buộc: anon key vốn công khai trong app, đọc thẳng từ trang live.
 
 name: Health check
 
 on:
   schedule:
     - cron: "17 */6 * * *"
+  deployment_status:
   workflow_dispatch:
 
 permissions:
@@ -15,11 +17,17 @@ permissions:
 
 jobs:
   health:
+    # Với sự kiện deploy: chỉ chạy khi Vercel báo bản PRODUCTION đã lên xong (bỏ qua Preview / đang build)
+    if: >-
+      github.event_name != 'deployment_status' ||
+      (github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'Production')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       APP_URL: https://app.evolve.vn/eq-gym/
       SUPA_URL: https://dpzlwlaekhfmorckukfm.supabase.co
+      TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
       - name: App học viên
         run: |
@@ -47,10 +55,42 @@ jobs:
             -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{}')
           [ "$code" = "200" ] || { echo "::error::Database trả về HTTP $code"; exit 1; }
 
+      # Bản vá 04/10/2026 bỏ "configured" khỏi phản hồi (không lộ cấu hình) → bước cũ tìm chữ đó nên đỏ oan từ 04/10.
+      # Giờ kiểm đúng hành vi: hàm đang chạy (GET) + tin báo tiền KHÔNG có khoá bị chính hàm từ chối 401
+      # (503 = chưa đặt khoá SEPAY_WEBHOOK_KEY; 401 của cổng Supabase không có "unauthorized" của hàm = đang bật nhầm verify_jwt).
       - name: Webhook SePay
         run: |
           res=$(curl -fsS --retry 3 --retry-delay 10 "$SUPA_URL/functions/v1/sepay-webhook")
-          grep -q '"configured":true' <<< "$res" || { echo "::error::Webhook SePay chưa cấu hình hoặc không chạy — học viên thanh toán sẽ không tự mở Premium"; exit 1; }
+          grep -q '"service":"sepay-webhook"' <<< "$res" || { echo "::error::Webhook SePay không chạy — học viên thanh toán sẽ không tự mở Premium"; exit 1; }
+          code=$(curl -s -o /tmp/wh.json -w "%{http_code}" --retry 3 --retry-delay 10 \
+            -X POST "$SUPA_URL/functions/v1/sepay-webhook" -H "Content-Type: application/json" -d '{}')
+          body=$(cat /tmp/wh.json)
+          if [ "$code" = "401" ] && grep -q '"error":"unauthorized"' <<< "$body"; then
+            echo "Webhook SePay chạy và từ chối tin báo tiền không có khoá (401) — đúng"
+          else
+            echo "::error::Webhook SePay trả HTTP $code khi không có khoá (mong 401 do chính hàm trả): ${body:0:200}"; exit 1
+          fi
+
+      # Người chưa đăng nhập: nội dung trả phí phải bị chặn (403), buổi miễn phí vẫn mở (200)
+      - name: Cổng chặn nội dung Premium
+        run: |
+          for p in comics/l5/p01.webp comics/l29/p01.webp workbook/bai-5.pdf; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 10 "${APP_URL}${p}?hc=$(date +%s)")
+            [ "$code" = "403" ] || { echo "::error::Nội dung trả phí $p trả HTTP $code cho người chưa đăng nhập (mong 403) — cổng chặn đang tắt hoặc hỏng"; exit 1; }
+            echo "OK 403  $p"
+          done
+          for p in comics/l0/p01.webp workbook/bai-0.pdf; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 10 "${APP_URL}${p}?hc=$(date +%s)")
+            [ "$code" = "200" ] || { echo "::error::Nội dung miễn phí $p trả HTTP $code (mong 200) — học viên miễn phí không xem được"; exit 1; }
+            echo "OK 200  $p"
+          done
 
       - name: Tổng kết
-        run: echo "✅ App, Quản trị, database, webhook SePay đều bình thường — $(TZ=Asia/Ho_Chi_Minh date '+%d/%m/%Y %H:%M')" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "✅ App, Quản trị, database, webhook SePay, cổng chặn nội dung đều bình thường — $(TZ=Asia/Ho_Chi_Minh date '+%d/%m/%Y %H:%M') (${{ github.event_name }})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Báo Telegram khi lỗi (nếu đã đặt secret)
+        if: failure() && env.TG_TOKEN != '' && env.TG_CHAT != ''
+        run: |
+          curl -s -o /dev/null -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT}" \
+            --data-urlencode "text=⚠️ EQ GYM health check LỖI ($(TZ=Asia/Ho_Chi_Minh date '+%d/%m %H:%M')): ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
