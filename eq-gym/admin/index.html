@@ -23,6 +23,14 @@ button{font-family:inherit}
 ::-webkit-scrollbar{width:0;height:0}
 @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 table{width:100%;border-collapse:collapse}
+.otbl{min-width:1240px;font-size:13.5px}
+.otbl th{position:sticky;top:0;background:#F7F9FB;color:#5C6B7A;font-weight:700;font-size:12.5px;text-align:left;padding:10px 12px;border-bottom:1px solid #E3E8EE;border-right:1px solid #EEF1F5;white-space:nowrap;user-select:none}
+.otbl th.s{cursor:pointer}.otbl th.s:hover{color:#0F1923}
+.otbl td{padding:9px 12px;border-bottom:1px solid #EEF1F5;border-right:1px solid #F3F5F8;white-space:nowrap;vertical-align:middle}
+.otbl tbody tr:hover{background:#F7FBFA}
+.otbl .r{text-align:right;font-variant-numeric:tabular-nums}
+.obtn{border:1px solid #E3E8EE;background:#fff;border-radius:8px;padding:5px 10px;font-size:12px;font-weight:800;cursor:pointer;color:#0F1923}
+.obtn.p{background:#0F1923;color:#fff;border-color:#0F1923}
 </style>
 </head>
 <body>
@@ -43,11 +51,13 @@ let UI={
   vouchersSearch:'', vouchersSort:'date_desc', vouchersPage:0, editVoucherId:null,
   txSearch:'', txSort:'date_desc', txPage:0, txStatus:'all', txMethod:'all', txPeriod:'all',
   affStatus:'pending', affSearch:'', affPage:0, affBusy:false,
-  actDays:14, stageSel:null, stageActive:'all', stagePage:0
+  actDays:14, stageSel:null, stageActive:'all', stagePage:0,
+  ord:{status:'all',method:'all',period:'all',search:'',sort:'created_at',asc:false,page:0}
 };
-let DATA={dash:null,vouchers:null,users:null,usersTotal:0,tx:null,txTotal:0,txSum:null,user:null,aff:null,affTotal:0,affStats:null,settings:null,act:null,actErr:'',stages:null,stagesErr:'',stageUsers:null,userUsage:null};
+let DATA={dash:null,vouchers:null,users:null,usersTotal:0,tx:null,txTotal:0,txSum:null,user:null,aff:null,affTotal:0,affStats:null,settings:null,act:null,actErr:'',stages:null,stagesErr:'',stageUsers:null,userUsage:null,ord:null,ordTotal:0,ordSum:null};
 let MSG='';
-let _txSeq=0, _usersSeq=0;
+let _txSeq=0, _usersSeq=0, _ordSeq=0;
+const ORD_PAGE=20;
 
 const $=id=>document.getElementById(id);
 const esc=s=>(s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -78,7 +88,7 @@ async function applySession(session){
     if(!prof){ try{ await sb.from('profiles').upsert({id:u.id,email:u.email}); const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle(); prof=data; }catch(e){} }
     AUTH={id:u.id,email:u.email,role:prof&&prof.role};
     STATE=(AUTH.role==='admin'||AUTH.role==='super_admin')?'ready':'forbidden';
-    if(STATE==='ready') loadAll();
+    if(STATE==='ready'){ if(location.hash==='#orders'&&AUTH.role==='super_admin') UI.view='orders'; loadAll(); }
   } else { AUTH=null; STATE='signin'; }
   render();
 }
@@ -94,6 +104,7 @@ async function loadAll(){
   await loadSettings();
   if(UI.view==='users') await loadUsers();
   if(UI.view==='tx') await loadTx();
+  if(UI.view==='orders') loadOrd();
   if(UI.view==='user'&&UI.userId) await loadUserDetail(UI.userId);
   if(UI.view==='affiliate') loadAffiliate();
   if(UI.view==='activity') loadActivity();
@@ -172,13 +183,14 @@ const TX_SORTS={
 const TX_STATUS=[['all','Tất cả'],['approved','Đã thanh toán'],['pending','Đang chờ'],['expired','Hết hạn / huỷ'],['rejected','Từ chối']];
 const TX_METHOD=[['all','Mọi kênh'],['sepay','QR SePay'],['payos','QR PayOS'],['manual','Chuyển khoản tay (cũ)'],['free','Miễn phí (voucher)']];
 const TX_PERIOD=[['all','Mọi thời gian'],['today','Hôm nay'],['7d','7 ngày qua'],['30d','30 ngày qua']];
-function txPeriodStart(){ const d=new Date(); d.setHours(0,0,0,0); if(UI.txPeriod==='today') return d; if(UI.txPeriod==='7d'){ d.setDate(d.getDate()-6); return d; } if(UI.txPeriod==='30d'){ d.setDate(d.getDate()-29); return d; } return null; }
-function txFilter(q){
-  if(UI.txStatus==='expired') q=q.in('status',['expired','cancelled']); else if(UI.txStatus!=='all') q=q.eq('status',UI.txStatus);
-  if(UI.txMethod==='free') q=q.eq('amount',0).eq('status','approved');
-  else if(UI.txMethod!=='all') q=q.eq('provider',UI.txMethod).gt('amount',0);
-  const st=txPeriodStart(); if(st) q=q.gte('created_at',st.toISOString());
-  const t=UI.txSearch.trim().replace(/[,()%*]/g,' ').trim();
+function txPeriodStart(period){ period=period||UI.txPeriod; const d=new Date(); d.setHours(0,0,0,0); if(period==='today') return d; if(period==='7d'){ d.setDate(d.getDate()-6); return d; } if(period==='30d'){ d.setDate(d.getDate()-29); return d; } return null; }
+function txFilter(q,f){
+  f=f||{status:UI.txStatus,method:UI.txMethod,period:UI.txPeriod,search:UI.txSearch};
+  if(f.status==='expired') q=q.in('status',['expired','cancelled']); else if(f.status!=='all') q=q.eq('status',f.status);
+  if(f.method==='free') q=q.eq('amount',0).eq('status','approved');
+  else if(f.method!=='all') q=q.eq('provider',f.method).gt('amount',0);
+  const st=txPeriodStart(f.period); if(st) q=q.gte('created_at',st.toISOString());
+  const t=f.search.trim().replace(/[,()%*]/g,' ').trim();
   if(t) q=q.or('user_email.ilike.*'+t+'*,code.ilike.*'+t+'*');
   return q;
 }
@@ -201,6 +213,39 @@ let _txSearchT=null;
 function onTxSearch(v){ UI.txSearch=v; UI.txPage=0; clearTimeout(_txSearchT); _txSearchT=setTimeout(loadTx,350); }
 function setTxFilter(k,v){ UI[k]=v; UI.txPage=0; DATA.tx=null; render(); loadTx(); }
 function txPageGo(d){ const maxPage=Math.max(0,Math.ceil(DATA.txTotal/PAGE_SIZE)-1); UI.txPage=Math.min(maxPage,Math.max(0,UI.txPage+d)); loadTx(); }
+
+/* ===== Đơn hàng (màn bảng rộng, chỉ Super Admin): cùng nguồn payments_history với tab Giao dịch ===== */
+const isSuper=()=>!!(AUTH&&AUTH.role==='super_admin');
+async function loadOrd(){
+  const seq=++_ordSeq, o=UI.ord;
+  const wasFocused=document.activeElement&&document.activeElement.id==='ordSearch';
+  let q=txFilter(sb.from('payments_history').select('*',{count:'exact'}),o).order(o.sort,{ascending:o.asc}).order('created_at',{ascending:false});
+  const from=o.page*ORD_PAGE; q=q.range(from,from+ORD_PAGE-1);
+  const qs=txFilter(sb.from('payments_history').select('amount,status'),o).limit(5000);
+  let rows=[],total=0,sum=null;
+  try{ const {data,count,error}=await q; if(error) throw error; rows=data||[]; total=count||0; }catch(e){ MSG=e.message; }
+  try{ const {data}=await qs; sum={total:0,paid:0,due:0}; (data||[]).forEach(x=>{ const a=ordAmounts(x); sum.total+=a.total; sum.paid+=a.paid; sum.due+=a.due; }); }catch(e){}
+  if(seq!==_ordSeq) return;   /* bấm lọc liên tiếp: bỏ kết quả của lần tải cũ về muộn */
+  DATA.ord=rows; DATA.ordTotal=total; DATA.ordSum=sum;
+  render();
+  if(wasFocused) refocus('ordSearch');
+}
+let _ordSearchT=null;
+function onOrdSearch(v){ UI.ord.search=v; UI.ord.page=0; clearTimeout(_ordSearchT); _ordSearchT=setTimeout(loadOrd,350); }
+function setOrd(k,v){ UI.ord[k]=v; UI.ord.page=0; DATA.ord=null; render(); loadOrd(); }
+function ordSortBy(col){ const o=UI.ord; if(o.sort===col) o.asc=!o.asc; else{ o.sort=col; o.asc=false; } o.page=0; DATA.ord=null; render(); loadOrd(); }
+function ordPageGo(d){ const maxPage=Math.max(0,Math.ceil(DATA.ordTotal/ORD_PAGE)-1); UI.ord.page=Math.min(maxPage,Math.max(0,UI.ord.page+d)); loadOrd(); }
+async function exportOrdCsv(){
+  try{
+    const {data,error}=await txFilter(sb.from('payments_history').select('*'),UI.ord).order('created_at',{ascending:false}).limit(5000);
+    if(error) throw error; if(!data||!data.length){ alert('Không có đơn nào khớp bộ lọc.'); return; }
+    const rows=[['Mã đơn','Email khách','Sản phẩm','Trạng thái','Kênh','Ngày tạo','Ngày thanh toán','Voucher','Mã giới thiệu','Tổng tiền (đ)','Đã thu (đ)','Còn phải thu (đ)']];
+    data.forEach(p=>{ const a=ordAmounts(p); rows.push([p.code||'',p.user_email||'',ordProduct(p),ordPayLabel(p),METHOD_LABEL[methodOf(p)]||methodOf(p),fdt(p.created_at),p.paid_at?fdt(p.paid_at):'',p.voucher_code||'',p.ref_code||'',a.total,a.paid,a.due]); });
+    const cell=x=>{ if(typeof x==='number') return String(x); let s=String(x==null?'':x); if(/^[=+\-@\t\r]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; };   /* chống formula injection */
+    const csv='﻿'+rows.map(r=>r.map(cell).join(',')).join('\n');
+    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); a.download='eqgym-don-hang-'+new Date().toISOString().slice(0,10)+'.csv'; document.body.appendChild(a); a.click(); a.remove();
+  }catch(e){ alert('Lỗi xuất file: '+e.message); }
+}
 
 /* Duyệt tay đi qua cùng hàm DB với webhook PayOS (_activate_payment): cộng hạn, trừ lượt voucher, tạo hoa hồng affiliate */
 async function approvePay(id){ try{ const {error}=await sb.rpc('admin_approve_payment',{p_id:id}); if(error) throw error; loadAll(); }catch(e){ alert('Lỗi: '+e.message); } }
@@ -255,7 +300,7 @@ async function grantPremium(uid){
 }
 async function banUser(uid,currentlyBanned){ if(!confirm(currentlyBanned?'Mở khoá tài khoản này?':'Khoá tài khoản này? Học viên sẽ không đăng nhập/luyện tập được nữa.')) return; try{ const {error}=await sb.rpc('admin_set_banned',{p_user_id:uid,p_banned:!currentlyBanned}); if(error) throw error; afterUserChange(); }catch(e){ alert('Lỗi: '+e.message); } }
 
-function nav(v){ UI.view=v; render(); window.scrollTo(0,0); if(v==='affiliate'&&DATA.aff==null) loadAffiliate(); if(v==='tx'&&DATA.tx==null) loadTx(); if(v==='users'&&DATA.users==null) loadUsers(); if(v==='overview') loadDashboard(); if(v==='activity') loadActivity(); }
+function nav(v){ if(v==='orders'&&!isSuper()) v='overview'; UI.view=v; try{ if(v==='orders') history.replaceState(null,'','#orders'); else if(location.hash) history.replaceState(null,'',location.pathname+location.search); }catch(e){} render(); window.scrollTo(0,0); if(v==='affiliate'&&DATA.aff==null) loadAffiliate(); if(v==='tx'&&DATA.tx==null) loadTx(); if(v==='orders'&&DATA.ord==null) loadOrd(); if(v==='users'&&DATA.users==null) loadUsers(); if(v==='overview') loadDashboard(); if(v==='activity') loadActivity(); }
 
 /* ===== Affiliate: cấu hình + duyệt/chi hoa hồng ===== */
 const AFF_TIERS=[['standard','Cá nhân / học viên',0.2],['partner','Tổ chức, đối tác',0.4],['trusted','Đối tác tin cậy',0.6]];
@@ -604,9 +649,75 @@ function txCard(p){
     ${p.paid_at&&p.status==='approved'?`<div style="font-size:10.5px;color:#8A97A5;font-weight:600;margin-top:2px">Thanh toán lúc ${fdt(p.paid_at)}${p.approved_by?' · duyệt tay':''}</div>`:''}
     ${p.note?`<div style="font-size:10.5px;color:#C74848;font-weight:700;margin-top:4px">${esc(p.note)}</div>`:''}${acts}`,'padding:12px 14px');
 }
+/* ===== ĐƠN HÀNG: bảng rộng cho máy tính, chỉ Super Admin ===== */
+function ordAmounts(p){ const a=p.amount||0; return {total:a,paid:p.status==='approved'?a:0,due:p.status==='pending'?a:0}; }
+function ordProduct(p){ const m=+p.months||0; return 'EQ GYM Premium'+(m>=600?' · trọn đời':m?' · '+m+' tháng':''); }
+function ordPayLabel(p){ if(p.status==='approved') return (p.amount||0)===0?'Miễn phí (voucher)':'Đã thanh toán'; if(p.status==='pending') return 'Chưa thanh toán'; if(p.status==='rejected') return 'Từ chối'; return p.status==='cancelled'?'Đã huỷ':'Hết hạn'; }
+function ordTag(text,bg,fg){ return `<span style="display:inline-block;padding:3px 10px;border-radius:6px;font-size:12.5px;font-weight:700;background:${bg};color:${fg}">${text}</span>`; }
+function ordPayTag(p){ const t=esc(ordPayLabel(p));
+  if(p.status==='approved') return (p.amount||0)===0?ordTag(t,'#FFF1D6','#9A6A00'):ordTag(t,'#DDF3E8','#1B7A4B');
+  if(p.status==='pending'||p.status==='rejected') return ordTag(t,'#FDE3E3','#C74848'); return ordTag(t,'#E9EDF2','#5C6B7A'); }
+function ordActTag(p){ if(p.status==='approved') return ordTag('Đã kích hoạt','#E4EEFF','#2F6FD6'); if(p.status==='pending') return ordTag('Chờ kích hoạt','#F1F3F6','#5C6B7A'); return '<span style="color:#B3BCC7">—</span>'; }
+function ordAvatar(email){ const e=email||'?', hue=[...e].reduce((a,c)=>a+c.charCodeAt(0),0)%360; return `<span style="display:inline-flex;width:22px;height:22px;border-radius:6px;align-items:center;justify-content:center;font-size:11px;font-weight:800;margin-right:8px;background:hsl(${hue} 70% 90%);color:hsl(${hue} 55% 32%)">${esc(e.charAt(0).toUpperCase())}</span>`; }
+function ordActions(p){ if(p.status!=='pending') return '';
+  if(p.provider==='manual') return `<button class="obtn p" onclick="approvePay('${p.id}')">Duyệt</button> <button class="obtn" onclick="rejectPay('${p.id}')">Từ chối</button>`;
+  return (p.provider==='payos'?`<button class="obtn p" onclick="recheckOrder('${p.id}')">Đối soát</button> `:'')+`<button class="obtn" onclick="closeOrder('${p.id}')">Đóng đơn</button>`; }
+function ordTh(label,col,right){ const o=UI.ord, on=o.sort===col; return `<th class="s${right?' r':''}" onclick="ordSortBy('${col}')">${label}${on?` <span style="color:#0A8C77">${o.asc?'↑':'↓'}</span>`:''}</th>`; }
+function moneyCell(n,color){ return `<td class="r" style="${n?'':'color:#B3BCC7;'}${color&&n?'color:'+color+';':''}">${n?'₫ '+fmt(n):'₫ 0'}</td>`; }
+function ordRow(p){
+  const a=ordAmounts(p), m=methodOf(p);
+  const gift=p.ref_code?ordTag('Giới thiệu '+esc(p.ref_code),'#EAFBF6','#0A6E5D'):p.voucher_code?ordTag(esc(p.voucher_code)+(p.discount_amount?' · -'+fmt(p.discount_amount)+'đ':''),'#EAFBF6','#0A6E5D'):'<span style="color:#B3BCC7">—</span>';
+  return `<tr>
+    <td style="font-weight:700;color:#0F1923"><span title="Mã đơn">${esc(p.code||'—')}</span></td>
+    <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis"><a onclick="openUser('${p.user_id}')" style="cursor:pointer;color:#0F1923;font-weight:600">${ordAvatar(p.user_email)}${esc(p.user_email||p.user_id||'—')}</a></td>
+    <td>${esc(ordProduct(p))}</td>
+    <td>${ordPayTag(p)}</td>
+    <td><span style="color:${METHOD_COLOR[m]||'#5C6B7A'}">●</span> ${METHOD_LABEL[m]||esc(m)}</td>
+    <td>${ordActTag(p)}</td>
+    <td style="color:#5C6B7A" title="${esc(fdt(p.created_at))}">${fdt(p.created_at)}</td>
+    <td>${gift}</td>
+    ${moneyCell(a.total)}${moneyCell(a.paid)}${moneyCell(a.due,'#C74848')}
+    <td>${ordActions(p)}</td>
+  </tr>`;
+}
+function viewOrders(){
+  const o=UI.ord, S=DATA.ordSum, maxPage=Math.max(0,Math.ceil(DATA.ordTotal/ORD_PAGE)-1);
+  const filt=(k,opts)=>`<select onchange="setOrd('${k}',this.value)" style="background:#fff;border:1px solid #E3E8EE;border-radius:8px;padding:8px 10px;font-size:13px;font-weight:600;color:#0F1923">${opts.map(([v,l])=>`<option value="${v}" ${v===o[k]?'selected':''}>${l}</option>`).join('')}</select>`;
+  let h=`<div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid #E3E8EE;flex-wrap:wrap">
+    ${LOGO}<h1 style="margin:0;font-family:'Space Grotesk';font-size:18px;font-weight:700">Đơn hàng</h1>
+    <span style="color:#5C6B7A;font-size:13px;font-weight:700">${DATA.ord?fmt(DATA.ordTotal)+' đơn khớp bộ lọc':'Đang tải…'}</span>
+    <span style="flex:1"></span>
+    <button class="obtn" onclick="exportOrdCsv()">⬇ Xuất CSV</button>
+    <button class="obtn" onclick="loadOrd()" title="Tải lại">⟳ Làm mới</button>
+    <button class="obtn" onclick="nav('overview')">← Về Quản trị</button>
+    <span style="font-size:12px;color:#8A97A5;font-weight:700">${esc(AUTH.email)}</span>
+    <button class="obtn" onclick="signOut()" title="Đăng xuất">🚪</button>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;padding:12px 20px;flex-wrap:wrap;border-bottom:1px solid #EEF1F5">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${TX_STATUS.map(([v,l])=>chip(l,o.status===v,`setOrd('status','${v}')`)).join('')}</div>
+    <span style="flex:1"></span>
+    ${filt('method',TX_METHOD)}${filt('period',TX_PERIOD)}
+    <input id="ordSearch" value="${esc(o.search)}" oninput="onOrdSearch(this.value)" placeholder="Tìm email hoặc mã đơn (EQG…)" style="width:260px;background:#fff;border:1px solid #E3E8EE;border-radius:8px;padding:8px 12px;font-size:13px">
+  </div>`;
+  h+=`<div style="overflow-x:auto"><table class="otbl"><thead><tr>
+    ${ordTh('# Mã đơn','code')}${ordTh('Khách hàng','user_email')}<th>Sản phẩm</th>${ordTh('Trạng thái thanh toán','status')}${ordTh('Kênh thanh toán','provider')}<th>Kích hoạt Premium</th>${ordTh('Ngày tạo','created_at')}<th>Voucher / Giới thiệu</th>${ordTh('Tổng tiền','amount',1)}<th class="r">Đã thu</th><th class="r">Còn phải thu</th><th>Thao tác</th>
+  </tr></thead><tbody>`;
+  if(DATA.ord==null) h+=`<tr><td colspan="12" style="padding:30px;text-align:center;color:#5C6B7A;font-weight:600">Đang tải…</td></tr>`;
+  else if(!DATA.ord.length) h+=`<tr><td colspan="12" style="padding:30px;text-align:center;color:#5C6B7A;font-weight:600">Không có đơn nào khớp bộ lọc.</td></tr>`;
+  else h+=DATA.ord.map(ordRow).join('');
+  h+=`</tbody>${S?`<tfoot><tr style="background:#F7F9FB;font-weight:800"><td colspan="8" style="padding:11px 12px;color:#5C6B7A;border-top:1px solid #E3E8EE">Tính toán · toàn bộ ${fmt(DATA.ordTotal)} đơn khớp bộ lọc (đơn hết hạn/huỷ/từ chối không tính tiền)</td><td class="r" style="padding:11px 12px;border-top:1px solid #E3E8EE">₫ ${fmt(S.total)}</td><td class="r" style="padding:11px 12px;border-top:1px solid #E3E8EE;color:#0A8C77">₫ ${fmt(S.paid)}</td><td class="r" style="padding:11px 12px;border-top:1px solid #E3E8EE;color:#C74848">₫ ${fmt(S.due)}</td><td style="border-top:1px solid #E3E8EE"></td></tr></tfoot>`:''}</table></div>`;
+  h+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px">
+    <button class="obtn" onclick="ordPageGo(-1)" ${o.page<=0?'disabled style="opacity:.4"':''}>‹ Trước</button>
+    <span style="font-size:12.5px;color:#5C6B7A;font-weight:700">Trang ${o.page+1}/${maxPage+1} · ${ORD_PAGE} đơn/trang</span>
+    <button class="obtn" onclick="ordPageGo(1)" ${o.page>=maxPage?'disabled style="opacity:.4"':''}>Sau ›</button>
+  </div>`;
+  if(MSG) h+=`<p style="margin:0;padding:0 20px 14px;color:#C74848;font-size:12px;font-weight:700">${esc(MSG)}</p>`;
+  return h;
+}
 function viewTx(){
   let h=header('Giao dịch',DATA.tx?fmt(DATA.txTotal)+' giao dịch khớp bộ lọc':'Tất cả đơn thanh toán');
   h+=`<div style="padding:12px 16px 90px">`;
+  if(isSuper()) h+=`<button onclick="nav('orders')" style="width:100%;margin-bottom:10px;border:1px solid #0FB89B;background:#EAFBF6;color:#0A6E5D;border-radius:12px;padding:11px;font-size:13px;font-weight:800;cursor:pointer">🖥 Mở bảng Đơn hàng (màn rộng · Super Admin) ›</button>`;
   h+=`<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:8px">${TX_STATUS.map(([v,l])=>chip(l,UI.txStatus===v,`setTxFilter('txStatus','${v}')`)).join('')}</div>`;
   h+=`<div style="display:flex;gap:6px;margin-bottom:8px">${sel('txMethodSel',TX_METHOD,UI.txMethod,"setTxFilter('txMethod',this.value)")}${sel('txPeriodSel',TX_PERIOD,UI.txPeriod,"setTxFilter('txPeriod',this.value)")}${sel('txSortSel',Object.entries(TX_SORTS).map(([v,d])=>[v,d.label]),UI.txSort,"setTxFilter('txSort',this.value)")}</div>`;
   h+=`<input id="txSearch" value="${esc(UI.txSearch)}" oninput="onTxSearch(this.value)" placeholder="Tìm theo email hoặc mã CK (EQG…)" style="width:100%;background:#fff;border:1px solid #E3E8EE;border-radius:12px;padding:11px 13px;font-size:13px;margin-bottom:10px">`;
@@ -833,6 +944,10 @@ function renderDashboard(){
   else if(UI.view==='affiliate') main=viewAffiliate();
   else if(UI.view==='users') main=viewUsers();
   else if(UI.view==='user') main=viewUser();
+  else if(UI.view==='orders'){
+    if(!isSuper()) return `<div style="min-height:100vh;max-width:480px;margin:0 auto;background:#F5F8FA;padding:60px 24px;text-align:center"><div style="font-size:36px">🔒</div><h1 style="font-family:'Space Grotesk';font-size:19px">Chỉ dành cho Super Admin</h1><button onclick="nav('overview')" class="obtn">← Về Quản trị</button></div>`;
+    return `<div style="min-height:100vh;max-width:1680px;margin:0 auto;background:#fff;box-shadow:0 0 40px rgba(15,25,35,.08)">${viewOrders()}</div>`;
+  }
   return `<div style="min-height:100vh;max-width:480px;margin:0 auto;position:relative;background:#F5F8FA;box-shadow:0 0 40px rgba(15,25,35,.08)">${main}</div>${bottomNav()}`;
 }
 
