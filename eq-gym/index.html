@@ -726,6 +726,20 @@ function quizResultHtml(q){
 /* ===== TÀI KHOẢN / AUTH ===== */
 function refreshAuthUI(){}
 function val(id){ const e=document.getElementById(id); return e?(e.value||'').trim():''; }
+/* Số điện thoại (không bắt buộc): chỉ qua RPC set_my_phone (DB chuẩn hoá + kiểm tra); chỉ quản trị viên đọc được */
+function phoneCardHtml(){
+  const inp='width:100%;background:#F5F8FA;border:1px solid #ECE7DD;border-radius:12px;padding:12px;font-size:14px;box-sizing:border-box';
+  return `<div style="margin-top:10px;background:#fff;border:1px solid #ECE7DD;border-radius:14px;padding:12px 14px">
+    <div style="font-size:13px;font-weight:800;color:#0F1923">Số điện thoại <span style="font-weight:600;color:#8A97A5">(không bắt buộc)</span></div>
+    <div style="font-size:12px;color:#5C6B7A;font-weight:600;margin:3px 0 9px;line-height:1.55">Để đội ngũ EQ GYM hỗ trợ bạn khi cần (thanh toán, tài khoản). Số này chỉ quản trị viên EQ GYM xem được; bạn có thể xoá bất cứ lúc nào bằng cách để trống rồi lưu.</div>
+    <div style="display:flex;gap:8px"><input id="acct_phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" value="${esc(AUTH.phone||'')}" placeholder="vd 0912 345 678" style="${inp};flex:1;min-width:0">
+      <button onclick="savePhone()" style="flex:0 0 auto;border:none;border-radius:12px;padding:0 18px;font-size:13.5px;font-weight:800;cursor:pointer;background:#0F1923;color:#fff;min-height:46px">Lưu</button></div></div>`;
+}
+async function savePhone(){
+  const v=val('acct_phone');
+  try{ const {data,error}=await sb.rpc('set_my_phone',{p_phone:v}); if(error) throw error; AUTH.phone=data||''; toast(data?'Đã lưu số điện thoại':'Đã xoá số điện thoại'); render(); }
+  catch(e){ toast(/22023|không hợp lệ/i.test((e&&e.message)||'')?'Số điện thoại chưa đúng — ví dụ 0912345678':'Chưa lưu được, thử lại nhé'); }
+}
 function acctHtml(){
   if(!BACKEND) return `<div style="background:#F5F8FA;border:1px solid #ECE7DD;border-radius:12px;padding:12px 14px;font-size:12.5px;margin-bottom:12px;color:#5C6B7A;line-height:1.6;font-weight:600">☁️ Backend chưa cấu hình — app đang chạy <b style="color:#0F1923">chế độ local</b> (lưu trên máy này, mở khóa toàn bộ). Chủ app xem <b style="color:#0A6E5D">docs/SETUP-SUPABASE.md</b> để bật tài khoản & Premium.</div>`;
   if(AUTH){ const prem=isPremium();
@@ -733,6 +747,7 @@ function acctHtml(){
       ${!prem?`<button onclick="UI.settingsOpen=false;showPremium()" style="width:100%;margin-top:10px;border:none;border-radius:14px;padding:14px;font-size:14px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#0A8570,#07705E);color:#fff;min-height:48px">${ICO('spark',17)} Nâng cấp Premium trọn đời ${fmt(PREMIUM_PRICE-welcomeAmt())}đ</button>`:''}
       ${prem&&COMMUNITY_URL?`<a href="${COMMUNITY_URL}" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:10px;border:none;border-radius:14px;padding:13px;font-size:14px;font-weight:800;background:linear-gradient(135deg,#0A8570,#07705E);color:#fff;min-height:48px">${ICO('users',17)} Vào cộng đồng EQ GYM</a>`:''}
       ${isAdmin()?`<a href="admin/" style="display:block;text-align:center;width:100%;margin-top:10px;border:1px solid #ECE7DD;border-radius:14px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;background:#fff;color:#0F1923;min-height:46px;box-sizing:border-box">${ICO('shield',17)} Trang Quản trị</a>`:''}
+      ${phoneCardHtml()}
       ${affCardHtml()}
       <button onclick="signOut()" style="width:100%;margin-top:10px;border:1px solid #ECE7DD;border-radius:14px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;background:#fff;color:#5C6B7A;min-height:46px">Đăng xuất</button></div>`;
   }
@@ -775,7 +790,7 @@ async function initAuth(){
   const {data,error}=await sb.auth.getSession(); if(error){ console.error('getSession',error); toast('Lỗi đăng nhập: '+error.message); }
   await applySession(data.session); cleanAuthParams(); sb.auth.onAuthStateChange((_e,session)=>{ applySession(session); });
 }
-async function applySession(session){ if(session&&session.user){ USAGE.token=session.access_token||''; const u=session.user; let prof=null; try{ const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle(); prof=data; }catch(e){} if(!prof){ try{ await sb.from('profiles').upsert({id:u.id,email:u.email}); const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle(); prof=data; }catch(e){} } if(prof&&prof.banned){ try{ await sb.auth.signOut(); }catch(e){} AUTH=null; toast('Tài khoản của bạn đã bị khoá. Liên hệ admin để biết thêm.'); render(); return; } AUTH={id:u.id,email:u.email,premium_until:prof&&prof.premium_until,role:prof&&prof.role,pay_code:prof&&prof.pay_code,ref_code:prof&&prof.ref_code}; const _ac=ensureAssetCookie(true); await migrateIfNeeded(); await pullRemote(); claimStoredRef(); loadWelcome(); await Promise.race([_ac,new Promise(r=>setTimeout(r,2500))]); } else { AUTH=null; UI.aff=null; USAGE.token=''; WOFFER=null; clearInterval(_wcT); } render(); }
+async function applySession(session){ if(session&&session.user){ USAGE.token=session.access_token||''; const u=session.user; let prof=null; try{ const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle(); prof=data; }catch(e){} if(!prof){ try{ await sb.from('profiles').upsert({id:u.id,email:u.email}); const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle(); prof=data; }catch(e){} } if(prof&&prof.banned){ try{ await sb.auth.signOut(); }catch(e){} AUTH=null; toast('Tài khoản của bạn đã bị khoá. Liên hệ admin để biết thêm.'); render(); return; } AUTH={id:u.id,email:u.email,premium_until:prof&&prof.premium_until,role:prof&&prof.role,pay_code:prof&&prof.pay_code,ref_code:prof&&prof.ref_code,phone:prof&&prof.phone}; const _ac=ensureAssetCookie(true); await migrateIfNeeded(); await pullRemote(); claimStoredRef(); loadWelcome(); await Promise.race([_ac,new Promise(r=>setTimeout(r,2500))]); } else { AUTH=null; UI.aff=null; USAGE.token=''; WOFFER=null; clearInterval(_wcT); } render(); }
 async function refreshProfile(){ if(!BACKEND||!AUTH) return; try{ const {data}=await sb.from('profiles').select('premium_until,role,ref_code').eq('id',AUTH.id).maybeSingle(); if(data){ AUTH.premium_until=data.premium_until; AUTH.role=data.role; AUTH.ref_code=data.ref_code; if(isPremium()) ensureAssetCookie(true); } }catch(e){} }
 
 /* ===== Thẻ xem nội dung Premium (cổng bảo vệ ở Vercel — xem docs/SECURITY.md) =====

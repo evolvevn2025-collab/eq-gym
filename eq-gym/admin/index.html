@@ -68,6 +68,13 @@ table{width:100%;border-collapse:collapse}
 .desk .split .sp-a{grid-column:2;grid-row:1}
 .desk .tcard .otbl tbody tr:last-child td{border-bottom:none}
 .desk .split .sp-a:only-child{grid-column:1/-1}
+.xm{position:relative;display:inline-block}
+.xm summary{list-style:none;display:inline-block}
+.xm summary::-webkit-details-marker{display:none}
+.xmenu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;background:#fff;border:1px solid #E3E8EE;border-radius:12px;box-shadow:0 14px 34px rgba(15,25,35,.18);min-width:190px;padding:6px}
+@media(max-width:1023px){.xmenu{left:0;right:auto}}
+.xmenu button{display:block;width:100%;text-align:left;border:none;background:none;padding:9px 11px;border-radius:8px;font-size:13px;font-weight:700;color:#0F1923;cursor:pointer}
+.xmenu button:hover{background:#F3F6F9}
 .tcard>div{overflow-x:auto}
 .tcard>div::-webkit-scrollbar{height:12px;width:auto}
 .tcard>div::-webkit-scrollbar-track{background:#F3F6F9}
@@ -193,19 +200,22 @@ const USER_SORTS={
   email_asc:{col:'email',asc:true,label:'Email A-Z'},
   email_desc:{col:'email',asc:false,label:'Email Z-A'}
 };
-async function loadUsers(){
-  const seq=++_usersSeq;
-  const wasFocused=document.activeElement&&document.activeElement.id==='usersSearch';
-  const sd=USER_SORTS[UI.usersSort]||USER_SORTS.created_desc;
+function usersFilter(q){
   const nowIso=new Date().toISOString();
-  let q=sb.from('profiles').select('*',{count:'exact'});
-  if(UI.usersSearch.trim()) q=q.ilike('email','%'+UI.usersSearch.trim()+'%');
+  const st=UI.usersSearch.trim().replace(/[,()%*]/g,' ').trim(); if(st) q=q.or('email.ilike.*'+st+'*,phone.ilike.*'+st+'*');
   if(UI.usersRole!=='all') q=UI.usersRole==='user'?q.or('role.is.null,role.eq.user'):q.eq('role',UI.usersRole);
   /* Admin/Super Admin luôn có Premium theo quyền (giống cách app tính) */
   if(UI.usersStatus==='premium') q=q.or('premium_until.gt.'+nowIso+',role.in.(admin,super_admin)');
   else if(UI.usersStatus==='free') q=q.or('premium_until.is.null,premium_until.lte.'+nowIso).or('role.is.null,role.eq.user');
   else if(UI.usersStatus==='banned') q=q.eq('banned',true);
   if(UI.usersTier!=='all') q=q.eq('affiliate_tier',UI.usersTier);
+  return q;
+}
+async function loadUsers(){
+  const seq=++_usersSeq;
+  const wasFocused=document.activeElement&&document.activeElement.id==='usersSearch';
+  const sd=USER_SORTS[UI.usersSort]||USER_SORTS.created_desc;
+  let q=usersFilter(sb.from('profiles').select('*',{count:'exact'}));
   q=q.order(sd.col,{ascending:sd.asc});
   const from=UI.usersPage*PAGE_SIZE;
   q=q.range(from,from+PAGE_SIZE-1);
@@ -217,7 +227,10 @@ async function loadUsers(){
   if(wasFocused) refocus('usersSearch');
 }
 function setUsersFilter(k,v){ UI[k]=v; UI.usersPage=0; DATA.users=null; render(); loadUsers(); }
-async function loadUserDetail(id){ try{ const {data,error}=await sb.rpc('admin_user_detail',{p_user:id}); if(error) throw error; DATA.user=data||{missing:true}; }catch(e){ DATA.user={error:e.message}; } render(); }
+async function loadUserDetail(id){ try{ const {data,error}=await sb.rpc('admin_user_detail',{p_user:id}); if(error) throw error; DATA.user=data||{missing:true};
+    if(data&&data.profile){ try{ const r=await sb.from('profiles').select('phone').eq('id',id).maybeSingle(); data.profile.phone=r.data?r.data.phone:null; }catch(e){} }
+  }catch(e){ DATA.user={error:e.message}; } render(); }
+async function editPhone(uid){ const cur=(DATA.user&&DATA.user.profile&&DATA.user.profile.phone)||''; const v=prompt('Số điện thoại của học viên (để trống = xoá số):',cur); if(v==null) return; try{ const {error}=await sb.rpc('admin_set_phone',{p_user_id:uid,p_phone:v}); if(error) throw error; afterUserChange(); }catch(e){ alert(/22023|không hợp lệ/i.test(e.message||'')?'Số điện thoại chưa đúng (vd 0912345678 hoặc +84912345678)':'Lỗi: '+e.message); } }
 function openUser(id){ if(!id) return; UI.view='user'; UI.userId=id; UI.histMore=30; DATA.user=null; DATA.userUsage=null; render(); window.scrollTo(0,0); loadUserDetail(id); loadUserUsage(id); }
 function afterUserChange(){ if(UI.view==='user'&&UI.userId) loadUserDetail(UI.userId); else loadUsers(); }
 function refocus(id){ const el=$(id); if(el){ el.focus(); const v=el.value; el.value=''; el.value=v; } }
@@ -288,10 +301,9 @@ async function loadOrd(){
   const wasFocused=document.activeElement&&document.activeElement.id==='ordSearch';
   let q=txFilter(sb.from('payments_history').select('*',{count:'exact'}),o).order(o.sort,{ascending:o.asc}).order('created_at',{ascending:false});
   const from=o.page*ORD_PAGE; q=q.range(from,from+ORD_PAGE-1);
-  const qs=txFilter(sb.from('payments_history').select('amount,status'),o).limit(5000);
   let rows=[],total=0,sum=null;
   try{ const {data,count,error}=await q; if(error) throw error; rows=data||[]; total=count||0; }catch(e){ MSG=e.message; }
-  try{ const {data}=await qs; sum={total:0,paid:0,due:0}; (data||[]).forEach(x=>{ const a=ordAmounts(x); sum.total+=a.total; sum.paid+=a.paid; sum.due+=a.due; }); }catch(e){}
+  try{ const data=await fetchAll(()=>txFilter(sb.from('payments_history').select('id,amount,status'),o).order('id')); sum={total:0,paid:0,due:0}; (data||[]).forEach(x=>{ const a=ordAmounts(x); sum.total+=a.total; sum.paid+=a.paid; sum.due+=a.due; }); }catch(e){}
   if(seq!==_ordSeq) return;   /* bấm lọc liên tiếp: bỏ kết quả của lần tải cũ về muộn */
   DATA.ord=rows; DATA.ordTotal=total; DATA.ordSum=sum;
   render();
@@ -302,17 +314,145 @@ function onOrdSearch(v){ UI.ord.search=v; UI.ord.page=0; clearTimeout(_ordSearch
 function setOrd(k,v){ UI.ord[k]=v; UI.ord.page=0; DATA.ord=null; render(); loadOrd(); }
 function ordSortBy(col){ const o=UI.ord; if(o.sort===col) o.asc=!o.asc; else{ o.sort=col; o.asc=false; } o.page=0; DATA.ord=null; render(); loadOrd(); }
 function ordPageGo(d){ const maxPage=Math.max(0,Math.ceil(DATA.ordTotal/ORD_PAGE)-1); UI.ord.page=Math.min(maxPage,Math.max(0,UI.ord.page+d)); loadOrd(); }
-async function exportOrdCsv(){
+/* ===== XUẤT EXCEL / PDF / CSV =====
+   ExcelJS + jsPDF + jspdf-autotable + font Roboto (có tiếng Việt) tự lưu ở ../vendor (CSP chỉ cho script cùng nguồn).
+   Chỉ nạp khi bấm "Xuất" nên không làm nặng trang. Mỗi bảng khai báo 1 hàm EXPORTS[loại] trả về
+   {title, sheet, file, filters, cols:[{h,t,w}], rows, totals}; t = text | date | money | int | pct. */
+const PDF_MAX=3000;
+let _xBusy=false; const _libs={};
+async function fetchAll(mk,max){ max=max||20000; let all=[]; for(let from=0;from<max;from+=1000){ const {data,error}=await mk().range(from,from+999); if(error) throw error; all=all.concat(data||[]); if(!data||data.length<1000) break; } return all; }
+function loadScript(src){ return _libs[src]||(_libs[src]=new Promise((res,rej)=>{ const el=document.createElement('script'); el.src=src; el.onload=res; el.onerror=()=>{ delete _libs[src]; rej(new Error('Không tải được thư viện '+src)); }; document.head.appendChild(el); })); }
+function xToast(msg,ms){ let t=$('xtoast'); if(!t){ t=document.createElement('div'); t.id='xtoast'; t.style.cssText='position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#0F1923;color:#fff;padding:11px 18px;border-radius:12px;font-size:13px;font-weight:700;z-index:90;box-shadow:0 10px 30px rgba(15,25,35,.3);max-width:90vw'; document.body.appendChild(t); } t.textContent=msg; t.style.display='block'; clearTimeout(t._t); if(ms) t._t=setTimeout(()=>{ t.style.display='none'; },ms); }
+function exportMenu(kind){ return `<details class="xm"><summary class="obtn p">⬇ Xuất ▾</summary><div class="xmenu"><button onclick="doExport('${kind}','xlsx')">📗 Excel (.xlsx)</button><button onclick="doExport('${kind}','pdf')">📕 PDF</button><button onclick="doExport('${kind}','csv')">📄 CSV</button></div></details>`; }
+document.addEventListener('click',e=>{ document.querySelectorAll('details.xm[open]').forEach(d=>{ if(!d.contains(e.target)) d.removeAttribute('open'); }); });
+const stamp=()=>new Date().toISOString().slice(0,10);
+const lab=(arr,v)=>(arr.find(x=>x[0]===v)||[])[1];
+const ftxt=parts=>parts.filter(Boolean).join(', ');
+function saveBlob(blob,name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); }
+function xFmt(c,v){ if(v==null||v==='') return ''; if(c.t==='date') return fdt(v); if(c.t==='money'||c.t==='int') return fmt(v); if(c.t==='pct') return Math.round(v*100)+'%'; return String(v); }
+const isNum=c=>c.t==='money'||c.t==='int'||c.t==='pct';
+const sumCol=(rows,i)=>rows.reduce((a,r)=>a+(+r[i]||0),0);
+
+async function doExport(kind,f){
+  document.querySelectorAll('details.xm[open]').forEach(d=>d.removeAttribute('open'));
+  if(_xBusy) return; _xBusy=true;
   try{
-    const {data,error}=await txFilter(sb.from('payments_history').select('*'),UI.ord).order('created_at',{ascending:false}).limit(5000);
-    if(error) throw error; if(!data||!data.length){ alert('Không có đơn nào khớp bộ lọc.'); return; }
-    const rows=[['Mã đơn','Email khách','Sản phẩm','Trạng thái','Kênh','Ngày tạo','Ngày thanh toán','Voucher','Mã giới thiệu','Tổng tiền (đ)','Đã thu (đ)','Còn phải thu (đ)']];
-    data.forEach(p=>{ const a=ordAmounts(p); rows.push([p.code||'',p.user_email||'',ordProduct(p),ordPayLabel(p),METHOD_LABEL[methodOf(p)]||methodOf(p),fdt(p.created_at),p.paid_at?fdt(p.paid_at):'',p.voucher_code||'',p.ref_code||'',a.total,a.paid,a.due]); });
-    const cell=x=>{ if(typeof x==='number') return String(x); let s=String(x==null?'':x); if(/^[=+\-@\t\r]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; };   /* chống formula injection */
-    const csv='﻿'+rows.map(r=>r.map(cell).join(',')).join('\n');
-    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); a.download='eqgym-don-hang-'+new Date().toISOString().slice(0,10)+'.csv'; document.body.appendChild(a); a.click(); a.remove();
-  }catch(e){ alert('Lỗi xuất file: '+e.message); }
+    xToast('Đang lấy dữ liệu…');
+    const ds=await EXPORTS[kind]();
+    if(!ds||!ds.rows.length){ xToast('Không có dữ liệu khớp bộ lọc.',3500); return; }
+    ds.sub='Xuất lúc '+fdt(new Date().toISOString())+' · '+AUTH.email+' · '+fmt(ds.rows.length)+' dòng'+(ds.filters?' · Bộ lọc: '+ds.filters:'');
+    xToast(f==='pdf'?'Đang tạo PDF…':f==='xlsx'?'Đang tạo Excel…':'Đang tạo CSV…');
+    if(f==='xlsx') await writeXlsx(ds); else if(f==='pdf') await writePdf(ds); else writeCsv(ds);
+    xToast('Đã tải xuống '+ds.file+'.'+f,3500);
+  }catch(e){ console.error(e); xToast('Lỗi xuất file: '+(e&&e.message||e),7000); }
+  finally{ _xBusy=false; }
 }
+function writeCsv(ds){
+  const cell=x=>{ if(typeof x==='number') return String(x); let t=String(x==null?'':x); if(/^[=+\-@\t\r]/.test(t)) t="'"+t; return '"'+t.replace(/"/g,'""')+'"'; };   /* chống formula injection */
+  const rows=[ds.cols.map(c=>c.h)].concat(ds.rows.map(r=>r.map((v,i)=>ds.cols[i].t==='date'?(v?fdt(v):''):v)));
+  if(ds.totals) rows.push(ds.cols.map((c,i)=>i===0?ds.totals.label:(ds.totals.v[i]!=null?ds.totals.v[i]:'')));
+  saveBlob(new Blob(['﻿'+rows.map(r=>r.map(cell).join(',')).join('\n')],{type:'text/csv;charset=utf-8'}),ds.file+'.csv');
+}
+async function writeXlsx(ds){
+  await loadScript('../vendor/exceljs-4.4.0.min.js');
+  const n=ds.cols.length, span=Math.max(n,2), wb=new ExcelJS.Workbook();
+  wb.creator='EQ GYM · Quản trị'; wb.created=new Date();
+  const ws=wb.addWorksheet(ds.sheet.slice(0,31),{views:[{state:'frozen',ySplit:3}]});
+  ws.getCell(1,1).value=ds.title; ws.getCell(1,1).font={bold:true,size:14,color:{argb:'FF0F1923'}}; ws.mergeCells(1,1,1,span);
+  ws.getCell(2,1).value=ds.sub; ws.getCell(2,1).font={size:9,color:{argb:'FF5C6B7A'}}; ws.mergeCells(2,1,2,span);
+  const hr=ws.getRow(3); hr.height=22;
+  ds.cols.forEach((c,i)=>{ const cell=hr.getCell(i+1); cell.value=c.h; cell.font={bold:true,color:{argb:'FFFFFFFF'}}; cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF0F1923'}}; cell.alignment={vertical:'middle',horizontal:isNum(c)?'right':'left',wrapText:true}; ws.getColumn(i+1).width=c.w||16; });
+  /* Excel không có múi giờ: đổi giờ Việt Nam thành "giờ UTC giả" để ô hiện đúng giờ đã xem trên trang */
+  const toXl=v=>{ const d=new Date(v); return isNaN(d)?String(v):new Date(d.getTime()-d.getTimezoneOffset()*60000); };
+  ds.rows.forEach(r=>{
+    const row=ws.addRow(r.map((v,i)=>v==null||v===''?null:(ds.cols[i].t==='date'?toXl(v):v)));
+    ds.cols.forEach((c,i)=>{ const cell=row.getCell(i+1); if(c.t==='date') cell.numFmt='dd/mm/yyyy hh:mm'; else if(c.t==='money'||c.t==='int') cell.numFmt='#,##0'; else if(c.t==='pct') cell.numFmt='0%'; cell.border={bottom:{style:'thin',color:{argb:'FFE3E8EE'}}}; cell.alignment={vertical:'top',wrapText:c.t==='text'&&(c.w||16)>=30}; });
+  });
+  if(ds.totals){ const row=ws.addRow(ds.cols.map((c,i)=>i===0?ds.totals.label:(ds.totals.v[i]!=null?ds.totals.v[i]:null))); row.font={bold:true};
+    row.eachCell({includeEmpty:true},cell=>{ cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF3F6F9'}}; cell.border={top:{style:'thin',color:{argb:'FF0F1923'}}}; });
+    ds.cols.forEach((c,i)=>{ if(c.t==='money'||c.t==='int') row.getCell(i+1).numFmt='#,##0'; }); }
+  ws.autoFilter={from:{row:3,column:1},to:{row:3,column:n}};
+  ws.pageSetup={orientation:n>6?'landscape':'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0};
+  const buf=await wb.xlsx.writeBuffer();
+  saveBlob(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),ds.file+'.xlsx');
+}
+async function fontB64(url){ const r=await fetch(url,{credentials:'same-origin'}); if(!r.ok) throw new Error('Không tải được font PDF ('+r.status+')'); const b=new Uint8Array(await r.arrayBuffer()); let t=''; for(let i=0;i<b.length;i+=0x8000) t+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000)); return btoa(t); }
+async function writePdf(ds){
+  await loadScript('../vendor/jspdf-4.2.1.umd.min.js'); await loadScript('../vendor/jspdf-autotable-5.0.9.min.js');
+  const [reg,bold]=await Promise.all([fontB64('../vendor/fonts/Roboto-Regular-vi.ttf'),fontB64('../vendor/fonts/Roboto-Bold-vi.ttf')]);
+  const {jsPDF}=window.jspdf, wide=ds.cols.length>6;
+  const doc=new jsPDF({orientation:wide?'landscape':'portrait',unit:'pt',format:'a4'});
+  doc.addFileToVFS('Roboto-Regular.ttf',reg); doc.addFont('Roboto-Regular.ttf','Roboto','normal');
+  doc.addFileToVFS('Roboto-Bold.ttf',bold); doc.addFont('Roboto-Bold.ttf','Roboto','bold');
+  const W=doc.internal.pageSize.getWidth(), H=doc.internal.pageSize.getHeight(), M=32, cut=ds.rows.length>PDF_MAX;
+  doc.setFont('Roboto','bold'); doc.setFontSize(15); doc.setTextColor(15,25,35); doc.text(ds.title,M,38);
+  doc.setFont('Roboto','normal'); doc.setFontSize(8.5); doc.setTextColor(92,107,122);
+  const subL=doc.splitTextToSize(ds.sub+(cut?' · PDF chỉ in '+fmt(PDF_MAX)+' dòng đầu, dùng Excel để lấy đủ':''),W-2*M); doc.text(subL,M,54);
+  const cs={}; ds.cols.forEach((c,i)=>{ cs[i]={halign:isNum(c)?'right':'left'}; });
+  const opts={
+    startY:54+subL.length*11+6, head:[ds.cols.map(c=>c.h)], body:ds.rows.slice(0,PDF_MAX).map(r=>r.map((v,i)=>xFmt(ds.cols[i],v))),
+    margin:{left:M,right:M,bottom:34,top:36},
+    styles:{font:'Roboto',fontStyle:'normal',fontSize:wide?7.2:8.5,cellPadding:3,overflow:'linebreak',textColor:[15,25,35],lineColor:[227,232,238],lineWidth:.4},
+    headStyles:{fillColor:[15,25,35],textColor:255,fontStyle:'bold'}, alternateRowStyles:{fillColor:[247,249,251]}, columnStyles:cs,
+    didParseCell:d=>{ if(d.section!=='body'&&isNum(ds.cols[d.column.index])) d.cell.styles.halign='right'; }
+  };
+  if(ds.totals){ opts.foot=[ds.cols.map((c,i)=>i===0?ds.totals.label:(ds.totals.v[i]!=null?fmt(ds.totals.v[i]):''))]; opts.footStyles={fillColor:[243,246,249],textColor:[15,25,35],fontStyle:'bold'}; opts.showFoot='lastPage'; }
+  const at=typeof window.autoTable==='function'?window.autoTable:(window.jspdf&&window.jspdf.autoTable);
+  if(typeof at==='function') at(doc,opts); else doc.autoTable(opts);
+  const pages=doc.getNumberOfPages();
+  for(let i=1;i<=pages;i++){ doc.setPage(i); doc.setFont('Roboto','normal'); doc.setFontSize(8); doc.setTextColor(138,151,165); doc.text('EQ GYM · Quản trị',M,H-16); doc.text('Trang '+i+'/'+pages,W-M,H-16,{align:'right'}); }
+  doc.save(ds.file+'.pdf');
+}
+
+const AFF_LABEL={pending:'Chờ duyệt',approved:'Chờ chuyển tiền',paid:'Đã trả',void:'Đã huỷ'};
+const EXPORTS={
+  ord:async()=>{
+    const o=UI.ord, data=await fetchAll(()=>txFilter(sb.from('payments_history').select('*'),o).order('created_at',{ascending:false}).order('id'));
+    const rows=data.map(p=>{ const a=ordAmounts(p); return [p.code||'',p.user_email||'',ordProduct(p),ordPayLabel(p),METHOD_LABEL[methodOf(p)]||methodOf(p),p.created_at,p.paid_at||null,p.voucher_code||'',p.ref_code||'',a.total,a.paid,a.due]; });
+    return {title:'Danh sách đơn hàng',sheet:'Đơn hàng',file:'eqgym-don-hang-'+stamp(),
+      filters:ftxt([o.status!=='all'&&lab(TX_STATUS,o.status),o.method!=='all'&&lab(TX_METHOD,o.method),o.period!=='all'&&lab(TX_PERIOD,o.period),o.search.trim()&&'“'+o.search.trim()+'”']),
+      cols:[{h:'Mã đơn',t:'text',w:15},{h:'Email khách',t:'text',w:32},{h:'Sản phẩm',t:'text',w:26},{h:'Trạng thái',t:'text',w:18},{h:'Kênh',t:'text',w:20},{h:'Ngày tạo',t:'date',w:18},{h:'Ngày thanh toán',t:'date',w:18},{h:'Voucher',t:'text',w:14},{h:'Mã giới thiệu',t:'text',w:14},{h:'Tổng tiền (đ)',t:'money',w:15},{h:'Đã thu (đ)',t:'money',w:15},{h:'Còn phải thu (đ)',t:'money',w:16}],
+      rows, totals:{label:'Tổng cộng',v:{9:sumCol(rows,9),10:sumCol(rows,10),11:sumCol(rows,11)}}};
+  },
+  aff:async()=>{
+    const data=await fetchAll(()=>affFilter(sb.from('affiliate_commissions_admin').select('*')).order('created_at',{ascending:false}).order('id'));
+    const ids=[...new Set(data.map(c=>c.payment_id).filter(Boolean))];
+    for(let i=0;i<ids.length;i+=100){ const {data:d}=await sb.from('payments').select('id,code').in('id',ids.slice(i,i+100)); (d||[]).forEach(x=>DATA.affCodes[x.id]=x.code); }
+    const rows=data.map(c=>{ const po=c.referrer_payout||{}, v=c.commission||0; return [DATA.affCodes[c.payment_id]||'',c.referrer_email||'',c.referee_email||'',AFF_LABEL[c.status]||c.status,c.created_at,+c.rate||0,c.amount_paid||0,v,c.status==='paid'?v:0,(c.status==='pending'||c.status==='approved')?v:0,po.bank||'',po.account||'',po.name||'',c.note||'']; });
+    return {title:'Hoa hồng affiliate',sheet:'Hoa hồng',file:'eqgym-hoa-hong-'+stamp(),
+      filters:ftxt([UI.affStatus!=='all'&&AFF_LABEL[UI.affStatus],UI.affPeriod!=='all'&&lab(TX_PERIOD,UI.affPeriod),UI.affSearch.trim()&&'“'+UI.affSearch.trim()+'”']),
+      cols:[{h:'Mã đơn',t:'text',w:15},{h:'Người giới thiệu',t:'text',w:32},{h:'Người được giới thiệu',t:'text',w:32},{h:'Trạng thái',t:'text',w:17},{h:'Ngày tạo',t:'date',w:18},{h:'Tỉ lệ',t:'pct',w:8},{h:'Giá trị đơn (đ)',t:'money',w:15},{h:'Hoa hồng (đ)',t:'money',w:15},{h:'Đã chi (đ)',t:'money',w:14},{h:'Còn phải chi (đ)',t:'money',w:16},{h:'Ngân hàng',t:'text',w:14},{h:'Số tài khoản',t:'text',w:18},{h:'Chủ tài khoản',t:'text',w:22},{h:'Ghi chú',t:'text',w:30}],
+      rows, totals:{label:'Tổng cộng (không tính đã huỷ)',v:{7:rows.filter(r=>r[3]!==AFF_LABEL.void).reduce((a,r)=>a+r[7],0),8:sumCol(rows,8),9:sumCol(rows,9)}}};
+  },
+  users:async()=>{
+    const sd=USER_SORTS[UI.usersSort]||USER_SORTS.created_desc;
+    const data=await fetchAll(()=>usersFilter(sb.from('profiles').select('*')).order(sd.col,{ascending:sd.asc}).order('id'));
+    const rows=data.map(u=>{ const role=u.role||'user', staff=role!=='user', prem=isPremU(u);
+      return [u.full_name||u.display_name||'',u.email||'',u.phone||'',ROLE_LABEL[role]||role,u.banned?'Đã khoá':prem?(isLife(u.premium_until)?'Premium trọn đời':'Premium'):'Miễn phí',staff?'Theo quyền':!u.premium_until?'':isLife(u.premium_until)?'Trọn đời':fd(u.premium_until),u.affiliate_tier&&u.affiliate_tier!=='standard'?tierLabel(u.affiliate_tier):'',u.ref_code||'',u.created_at]; });
+    return {title:'Danh sách học viên',sheet:'Học viên',file:'eqgym-hoc-vien-'+stamp(),
+      filters:ftxt([UI.usersRole!=='all'&&(ROLE_LABEL[UI.usersRole]||UI.usersRole),UI.usersStatus!=='all'&&({premium:'Premium',free:'Miễn phí',banned:'Bị khoá'})[UI.usersStatus],UI.usersTier!=='all'&&tierLabel(UI.usersTier),UI.usersSearch.trim()&&'“'+UI.usersSearch.trim()+'”']),
+      cols:[{h:'Họ tên',t:'text',w:26},{h:'Email',t:'text',w:34},{h:'Số điện thoại',t:'text',w:16},{h:'Vai trò',t:'text',w:14},{h:'Gói',t:'text',w:18},{h:'Hạn Premium',t:'text',w:16},{h:'Hạng affiliate',t:'text',w:26},{h:'Mã giới thiệu',t:'text',w:14},{h:'Ngày đăng ký',t:'date',w:18}],
+      rows};
+  },
+  log:async()=>{
+    if(!DATA.staff.length) await loadStaff();
+    const data=await fetchAll(()=>logFilter(sb.from('admin_audit_log').select('*'),UI.log).order('at',{ascending:false}).order('id'),5000);
+    await Promise.all([loadNames(logIds(data)),loadCodes(logPayIds(data))]);
+    const rows=data.map(r=>{ const i=logInfo(r), n=DATA.names[r.actor]||{}; return [r.at,nm(r.actor),ROLE_LABEL[n.role]||'',i.title,['Thường','Quan trọng','Nhạy cảm'][i.sev],i.obj,i.note]; });
+    const o=UI.log;
+    return {title:'Nhật ký hoạt động admin',sheet:'Nhật ký',file:'eqgym-nhat-ky-'+stamp(),
+      filters:ftxt([o.group!=='all'&&lab(LOG_GROUPS,o.group),o.actor!=='all'&&nm(o.actor),o.period!=='all'&&lab(TX_PERIOD,o.period)]),
+      cols:[{h:'Thời gian',t:'date',w:18},{h:'Người thực hiện',t:'text',w:32},{h:'Vai trò',t:'text',w:14},{h:'Hành động',t:'text',w:36},{h:'Mức',t:'text',w:12},{h:'Đối tượng',t:'text',w:30},{h:'Chi tiết / lý do',t:'text',w:44}],
+      rows};
+  },
+  vouchers:async()=>{
+    const term=UI.vouchersSearch.trim().toLowerCase(), sd=VOUCHER_SORTS[UI.vouchersSort]||VOUCHER_SORTS.date_desc;
+    const list=applySort((DATA.vouchers||[]).filter(v=>!term||v.code.toLowerCase().includes(term)),sd.col,sd.asc);
+    const rows=list.map(v=>[v.code,v.active?'Đang bật':'Đã tắt',v.discount_amount||0,v.used_count||0,v.max_uses!=null?v.max_uses:'',isFreeVoucher(v.discount_amount)?'Miễn phí':'Giảm giá',v.created_at]);
+    return {title:'Mã giảm giá',sheet:'Voucher',file:'eqgym-voucher-'+stamp(),filters:ftxt([term&&'“'+UI.vouchersSearch.trim()+'”']),
+      cols:[{h:'Mã',t:'text',w:18},{h:'Trạng thái',t:'text',w:14},{h:'Giảm (đ)',t:'money',w:14},{h:'Đã dùng',t:'int',w:10},{h:'Tối đa lượt',t:'int',w:12},{h:'Loại',t:'text',w:12},{h:'Ngày tạo',t:'date',w:18}],rows};
+  }
+};
 
 /* Duyệt tay đi qua cùng hàm DB với webhook PayOS (_activate_payment): cộng hạn, trừ lượt voucher, tạo hoa hồng affiliate */
 async function approvePay(id){ try{ const {error}=await sb.rpc('admin_approve_payment',{p_id:id}); if(error) throw error; loadAll(); }catch(e){ alert('Lỗi: '+e.message); } }
@@ -389,10 +529,9 @@ async function loadAffiliate(){
   try{ const {data}=await sb.rpc('admin_affiliate_stats'); DATA.affStats=(data&&data[0])||null; }catch(e){}
   const ps=affPs(), from=UI.affPage*ps;
   const q=affFilter(sb.from('affiliate_commissions_admin').select('*',{count:'exact'})).order(UI.affSort,{ascending:UI.affAsc}).order('created_at',{ascending:false}).range(from,from+ps-1);
-  const qs=affFilter(sb.from('affiliate_commissions_admin').select('commission,status')).limit(5000);
   let rows=[],total=0,sum=null;
   try{ const {data,count,error}=await q; if(error) throw error; rows=data||[]; total=count||0; }catch(e){ MSG=e.message; }
-  try{ const {data}=await qs; sum={total:0,paid:0,due:0}; (data||[]).forEach(c=>{ const v=c.commission||0; if(c.status==='void') return; sum.total+=v; if(c.status==='paid') sum.paid+=v; else sum.due+=v; }); }catch(e){}
+  try{ const data=await fetchAll(()=>affFilter(sb.from('affiliate_commissions_admin').select('id,commission,status')).order('id')); sum={total:0,paid:0,due:0}; (data||[]).forEach(c=>{ const v=c.commission||0; if(c.status==='void') return; sum.total+=v; if(c.status==='paid') sum.paid+=v; else sum.due+=v; }); }catch(e){}
   try{ const ids=rows.map(c=>c.payment_id).filter(Boolean); if(ids.length){ const {data}=await sb.from('payments').select('id,code').in('id',ids); (data||[]).forEach(x=>DATA.affCodes[x.id]=x.code); } }catch(e){}
   if(seq!==_affSeq) return;
   DATA.aff=rows; DATA.affTotal=total; DATA.affSum=sum;
@@ -789,7 +928,7 @@ function viewOrders(title){
   title=title||'Đơn hàng';
   const o=UI.ord, S=DATA.ordSum;
   const filt=(k,opts)=>`<select onchange="setOrd('${k}',this.value)" style="background:#fff;border:1px solid #E3E8EE;border-radius:8px;padding:8px 10px;font-size:13px;font-weight:600;color:#0F1923">${opts.map(([v,l])=>`<option value="${v}" ${v===o[k]?'selected':''}>${l}</option>`).join('')}</select>`;
-  const btns=`<button class="obtn" onclick="exportOrdCsv()">⬇ Xuất CSV</button><button class="obtn" onclick="loadOrd()" title="Tải lại">⟳ Làm mới</button>`;
+  const btns=`${exportMenu('ord')}<button class="obtn" onclick="loadOrd()" title="Tải lại">⟳ Làm mới</button>`;
   let h=header(title,DATA.ord?fmt(DATA.ordTotal)+' đơn khớp bộ lọc':'Đang tải…',isDesk()?btns:'');
   h+=`<div class="pc" style="padding:12px 16px 90px">${isDesk()?'':`<div style="display:flex;gap:8px;margin-bottom:10px">${btns}</div>`}<div class="tbar">
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${TX_STATUS.map(([v,l])=>chip(l,o.status===v,`setOrd('status','${v}')`)).join('')}</div>
@@ -824,6 +963,7 @@ function logInfo(r){
   else if(a==='user.grant_premium') Object.assign(o,{ic:'⭐',sev:2,title:'Cấp Premium '+(d.months>0?d.months+' tháng':'trọn đời'),obj:nm(t),note:d.reason||''});
   else if(a==='user.revoke_premium') Object.assign(o,{ic:'⛔',sev:2,title:'Thu hồi Premium',obj:nm(t),note:[d.reason,d.commissions_voided?'huỷ '+d.commissions_voided+' hoa hồng chưa chi':''].filter(Boolean).join(' · ')});
   else if(a==='user.ban') Object.assign(o,{ic:'🚫',sev:2,title:d.banned?'Khoá tài khoản':'Mở khoá tài khoản',obj:nm(t)});
+  else if(a==='user.phone') Object.assign(o,{ic:'📞',sev:1,title:d.cleared?'Xoá số điện thoại':'Cập nhật số điện thoại',obj:nm(t),note:d.cleared?'':'số kết thúc …'+d.tail});
   else if(a==='user.affiliate_tier'){ const tr=AFF_TIERS.find(x=>x[0]===d.tier); Object.assign(o,{ic:'🤝',sev:1,title:'Đổi hạng affiliate → '+(tr?tr[1]:d.tier),obj:nm(t)}); }
   else if(a==='payment.approve') Object.assign(o,{ic:'💳',sev:1,title:'Duyệt tay đơn thanh toán',obj:pay(t),note:fmt(d.amount)+'đ · khách '+nm(d.user)});
   else if(a.indexOf('payment.')===0){ const s=a.slice(8); Object.assign(o,{ic:'🧾',sev:s==='rejected'?1:0,title:({rejected:'Từ chối đơn',expired:'Đóng đơn hết hạn / bỏ dở',cancelled:'Huỷ đơn',approved:'Duyệt đơn'})[s]||'Đơn → '+s,obj:pay(t)}); }
@@ -863,21 +1003,9 @@ async function loadLog(){
 function setLog(k,v){ UI.log[k]=v; UI.log.page=0; DATA.log=null; render(); loadLog(); }
 function logPageGo(d){ const maxPage=Math.max(0,Math.ceil(DATA.logTotal/LOG_PS)-1); UI.log.page=Math.min(maxPage,Math.max(0,UI.log.page+d)); DATA.log=null; render(); loadLog(); }
 function logSortToggle(){ UI.log.asc=!UI.log.asc; UI.log.page=0; DATA.log=null; render(); loadLog(); }
-async function exportLogCsv(){
-  try{
-    const {data,error}=await logFilter(sb.from('admin_audit_log').select('*'),UI.log).order('at',{ascending:false}).limit(2000);
-    if(error) throw error; if(!data||!data.length){ alert('Không có sự kiện nào khớp bộ lọc.'); return; }
-    await Promise.all([loadNames(logIds(data)),loadCodes(logPayIds(data))]);
-    const rows=[['Thời gian','Người thực hiện','Vai trò','Hành động','Mức','Đối tượng','Chi tiết']];
-    data.forEach(r=>{ const i=logInfo(r), n=DATA.names[r.actor]||{}; rows.push([fdt(r.at),nm(r.actor),ROLE_LABEL[n.role]||'',i.title,['Thường','Quan trọng','Nhạy cảm'][i.sev],i.obj,i.note]); });
-    const cell=x=>{ let s=String(x==null?'':x); if(/^[=+\-@\t\r]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; };   /* chống formula injection */
-    const csv='﻿'+rows.map(r=>r.map(cell).join(',')).join('\n');
-    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); a.download='eqgym-nhat-ky-'+new Date().toISOString().slice(0,10)+'.csv'; document.body.appendChild(a); a.click(); a.remove();
-  }catch(e){ alert('Lỗi xuất file: '+e.message); }
-}
 function viewLog(){
   const o=UI.log, maxPage=Math.max(0,Math.ceil(DATA.logTotal/LOG_PS)-1);
-  const btns=`<button class="obtn" onclick="exportLogCsv()">⬇ Xuất CSV</button><button class="obtn" onclick="loadLog()">⟳ Làm mới</button>`;
+  const btns=`${exportMenu('log')}<button class="obtn" onclick="loadLog()">⟳ Làm mới</button>`;
   let h=header('Nhật ký hoạt động',DATA.log?fmt(DATA.logTotal)+' sự kiện khớp bộ lọc':'Admin & Super Admin đã làm gì, lúc nào',isDesk()?btns:'');
   if(!isSuper()) return h+`<div style="padding:40px 24px;text-align:center;color:#5C6B7A;font-weight:700">🔒 Chỉ Super Admin xem được nhật ký.</div>`;
   const staff=(DATA.staff||[]).slice().sort((x,y)=>(x.email||'').localeCompare(y.email||''));
@@ -1009,7 +1137,7 @@ function viewTx(){
   return h+`</div>`;
 }
 function viewVouchers(){
-  let h=header('Mã giảm giá','Tạo & quản lý voucher');
+  let h=header('Mã giảm giá','Tạo & quản lý voucher',isDesk()?exportMenu('vouchers'):'');
   h+=`<div class="pc" style="padding:14px 16px 90px">`;
   const canEditV=!!(AUTH&&AUTH.role==='super_admin');
   if(DATA.settings) h+=card(`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div style="flex:1;min-width:0"><div style="font-size:11px;color:#8A6A2E;font-weight:800;letter-spacing:.3px">MÃ GIỚI THIỆU (AFFILIATE)</div>
@@ -1064,17 +1192,19 @@ function avatar(u,size){ const email=(u&&u.email)||'', c=(((u&&u.full_name)||ema
 function tbl(head,body,cls){ return `<div class="tcard"><div style="overflow-x:auto"><table class="otbl ${cls||''}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></div>`; }
 const GREEN=['#DDF3E8','#1B7A4B'], GREY=['#E9EDF2','#5C6B7A'], RED=['#FDE3E3','#C74848'], AMBER=['#FFF1D6','#9A6A00'], BLUE=['#E4EEFF','#2F6FD6'];
 const tag=(t,c)=>ordTag(t,c[0],c[1]);
+function fmtPhone(p){ p=String(p||''); const m=/^(0\d{3})(\d{3})(\d{3,4})$/.exec(p); return m?m[1]+' '+m[2]+' '+m[3]:p; }
 function usersTable(){
   const rows=DATA.users.map(u=>{ const prem=isPremU(u), self=u.id===AUTH.id, role=u.role||'user', staff=role!=='user';
     const plan=u.banned?tag('Đã khoá',RED):prem?tag(isLife(u.premium_until)?'★ Trọn đời':'★ Premium',GREEN):tag('Miễn phí',GREY);
     const until=staff?'Theo quyền':!u.premium_until?'—':isLife(u.premium_until)?'Trọn đời':(new Date(u.premium_until)<=new Date()?'Hết hạn ':'Đến ')+fd(u.premium_until);
     return `<tr onclick="openUser('${u.id}')" style="cursor:pointer">
       <td><div style="display:flex;align-items:center;gap:10px">${avatar(u,30)}<div style="min-width:0"><div style="font-weight:700">${esc(u.full_name||u.email||u.id)}${self?' (bạn)':''}</div>${u.full_name?`<div style="font-size:12px;color:#5C6B7A">${esc(u.email||'')}</div>`:''}</div></div></td>
+      <td>${u.phone?esc(fmtPhone(u.phone)):'<span style="color:#B3BCC7">—</span>'}</td>
       <td>${staff?tag(ROLE_LABEL[role]||esc(role),BLUE):'<span style="color:#5C6B7A">'+(ROLE_LABEL[role]||esc(role))+'</span>'}</td>
       <td>${plan}</td><td style="color:#5C6B7A">${until}</td>
       <td>${u.affiliate_tier&&u.affiliate_tier!=='standard'?tag('🤝 '+esc(tierLabel(u.affiliate_tier)),AMBER):'<span style="color:#B3BCC7">—</span>'}</td>
       <td style="color:#5C6B7A">${fd(u.created_at)}</td><td style="color:#B7C1CC;font-size:18px">›</td></tr>`; }).join('');
-  return tbl('<th>Học viên</th><th>Vai trò</th><th>Gói</th><th>Hạn Premium</th><th>Hạng affiliate</th><th>Ngày đăng ký</th><th></th>',rows,'m');
+  return tbl('<th>Học viên</th><th>Số điện thoại</th><th>Vai trò</th><th>Gói</th><th>Hạn Premium</th><th>Hạng affiliate</th><th>Ngày đăng ký</th><th></th>',rows,'m');
 }
 function voucherTable(list,canEdit){
   const inp='background:#F5F8FA;border:1px solid #E3E8EE;border-radius:8px;padding:7px 9px;font-size:13px;width:100%';
@@ -1131,12 +1261,12 @@ function affDesk(){
   return h;
 }
 function viewUsers(){
-  let h=header('Học viên',DATA.users?fmt(DATA.usersTotal)+' tài khoản khớp bộ lọc':'');
+  let h=header('Học viên',DATA.users?fmt(DATA.usersTotal)+' tài khoản khớp bộ lọc':'',isDesk()?exportMenu('users'):'');
   h+=`<div class="pc" style="padding:12px 16px 90px">`;
   h+='<div class="tbar">';
   h+=`<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:8px">${[['all','Tất cả'],['user','Học viên'],['admin','Admin'],['super_admin','Super Admin']].map(([v,l])=>chip(l,UI.usersRole===v,`setUsersFilter('usersRole','${v}')`)).join('')}</div>`;
   h+=`<div style="display:flex;gap:6px;margin-bottom:8px">${sel('usersStatusSel',[['all','Mọi trạng thái'],['premium','Premium'],['free','Miễn phí'],['banned','Bị khoá']],UI.usersStatus,"setUsersFilter('usersStatus',this.value)")}${sel('usersTierSel',[['all','Mọi hạng affiliate']].concat(AFF_TIERS.map(([k,l])=>[k,l])),UI.usersTier,"setUsersFilter('usersTier',this.value)")}${sel('usersSortSel',Object.entries(USER_SORTS).map(([v,d])=>[v,d.label]),UI.usersSort,"setUsersFilter('usersSort',this.value)")}</div>`;
-  h+=`<input id="usersSearch" value="${esc(UI.usersSearch)}" oninput="onUsersSearch(this.value)" placeholder="Tìm theo email..." style="width:100%;background:#fff;border:1px solid #E3E8EE;border-radius:12px;padding:11px 13px;font-size:13px;margin-bottom:10px">`;
+  h+=`<input id="usersSearch" value="${esc(UI.usersSearch)}" oninput="onUsersSearch(this.value)" placeholder="Tìm theo email hoặc SĐT..." style="width:100%;background:#fff;border:1px solid #E3E8EE;border-radius:12px;padding:11px 13px;font-size:13px;margin-bottom:10px">`;
   h+='</div>';
   if(DATA.users==null) h+=`<p style="color:#5C6B7A;font-weight:600">Đang tải...</p>`;
   else if(!DATA.users.length) h+=`<p style="color:#5C6B7A;font-weight:600;text-align:center;padding:24px 0">Không tìm thấy tài khoản nào.</p>`;
@@ -1148,6 +1278,7 @@ function viewUsers(){
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.full_name||u.email||u.id)}${isSelf?' (bạn)':''}</div>
         ${u.full_name?`<div style="font-size:11px;color:#5C6B7A;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.email||'')}</div>`:''}
+        ${u.phone?`<div style="font-size:11px;color:#0A6E5D;font-weight:700">📞 ${esc(fmtPhone(u.phone))}</div>`:''}
         <div style="font-size:10.5px;color:#5C6B7A;font-weight:700;margin-top:1px">${fd(u.created_at)} · ${ROLE_LABEL[u.role||'user']||esc(u.role)}${u.affiliate_tier&&u.affiliate_tier!=='standard'?` · <span style="color:#B25E09">🤝 ${esc(tierLabel(u.affiliate_tier))}</span>`:''}</div>
       </div>
       ${u.banned?pill('Đã khoá','warn'):pill(prem?(isLife(u.premium_until)?'★ Trọn đời':'★ Premium'):'Free',prem?'good':'off')}
@@ -1192,7 +1323,7 @@ function viewUser(){
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">${pill(ROLE_LABEL[p.role||'user']||esc(p.role),p.role&&p.role!=='user'?'good':'off')}${p.banned?pill('Đã khoá','warn'):pill(premText(p),prem?'good':'off')}${p.affiliate_tier&&p.affiliate_tier!=='standard'?pill('🤝 '+esc(tierLabel(p.affiliate_tier)),'good'):''}</div></div></div>
     <div style="margin-top:10px">
       ${infoRow('Ngày tạo',fdt(p.created_at))}${infoRow('Đăng nhập gần nhất',p.last_sign_in_at?fdt(p.last_sign_in_at)+' · '+ago(p.last_sign_in_at):'—')}
-      ${infoRow('Cách đăng nhập',p.provider==='google'?'Google':p.provider==='email'?'Email (link)':esc(p.provider||'—'))}
+      ${infoRow('Số điện thoại',(p.phone?`<a href="tel:${esc(p.phone)}" style="font-weight:800">${esc(fmtPhone(p.phone))}</a>`:'—')+` <button class="obtn" style="margin-left:6px" onclick="editPhone('${p.id}')">${p.phone?'Sửa':'Thêm'}</button>`)}${infoRow('Cách đăng nhập',p.provider==='google'?'Google':p.provider==='email'?'Email (link)':esc(p.provider||'—'))}
       ${infoRow('Mã giới thiệu',esc(p.ref_code||'—'))}${infoRow('Được giới thiệu bởi',esc(p.referred_by_email||'—'))}
       ${infoRow('TK nhận hoa hồng',p.payout_info&&p.payout_info.account?esc((p.payout_info.bank||'')+' · '+p.payout_info.account+' · '+(p.payout_info.name||'')):'—')}
     </div>`);
@@ -1240,7 +1371,7 @@ function viewUser(){
 }
 function viewAffiliate(){
   const s=DATA.settings||{}, st=DATA.affStats;
-  const abtns=`<button class="obtn" onclick="UI.affCfgOpen=!UI.affCfgOpen;render()">⚙️ Cấu hình${UI.affCfgOpen?' ▴':' ▾'}</button><button class="obtn" onclick="exportAffCsv()">⬇ CSV chuyển tiền</button><button class="obtn" onclick="loadAffiliate()">⟳ Làm mới</button>`;
+  const abtns=`<button class="obtn" onclick="UI.affCfgOpen=!UI.affCfgOpen;render()">⚙️ Cấu hình${UI.affCfgOpen?' ▴':' ▾'}</button>${exportMenu('aff')}<button class="obtn" onclick="exportAffCsv()">⬇ CSV chuyển tiền</button><button class="obtn" onclick="loadAffiliate()">⟳ Làm mới</button>`;
   let h=header('Affiliate','Mã giới thiệu & hoa hồng',isDesk()?abtns:'');
   h+=`<div class="pc" style="padding:14px 16px 90px">`;
   h+='<div class="split"><div class="sp-a">';
